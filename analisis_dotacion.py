@@ -26,9 +26,14 @@ def crear_pdf_resumen(n_altas, n_bajas, df_bajas_motivo, df_resumen_activos):
         pdf.set_font("Arial", "B", 10)
         pdf.cell(130, 8, "Motivo", 1)
         pdf.cell(40, 8, "Cantidad", 1, ln=True, align="C")
-        pdf.set_font("Arial", "", 10)
-        for _, row in df_bajas_motivo.iterrows():
-            pdf.cell(130, 8, str(row['Motivo de la medida']), 1)
+        
+        for index, row in df_bajas_motivo.iterrows():
+            # Poner la fila "Total" en negrita
+            if index == "Total":
+                pdf.set_font("Arial", "B", 10)
+            else:
+                pdf.set_font("Arial", "", 10)
+            pdf.cell(130, 8, str(index), 1)
             pdf.cell(40, 8, str(row['Cantidad']), 1, ln=True, align="C")
         pdf.ln(8)
 
@@ -41,8 +46,12 @@ def crear_pdf_resumen(n_altas, n_bajas, df_bajas_motivo, df_resumen_activos):
         for item in header:
             pdf.cell(col_width, 8, str(item), 1, align="C")
         pdf.ln()
-        pdf.set_font("Arial", "", 8)
+        
         for index, row in df_resumen_activos.iterrows():
+            if index == "Total":
+                pdf.set_font("Arial", "B", 8)
+            else:
+                pdf.set_font("Arial", "", 8)
             pdf.cell(col_width, 8, str(index), 1)
             for item in row:
                 pdf.cell(col_width, 8, str(item), 1, align="C")
@@ -91,12 +100,10 @@ if uploaded_file:
         df_base = df_base_raw.copy()
         df_base.rename(columns={'Gr.prof.': 'Categoría', 'División de personal': 'Línea'}, inplace=True)
 
-        # Formatear fechas a solo fecha, sin hora
         for col in ['Fecha', 'Desde', 'Fecha nac.']:
             if col in df_base.columns:
-                df_base[col] = pd.to_datetime(df_base[col]).dt.date
+                df_base[col] = pd.to_datetime(df_base[col], errors='coerce').dt.date
         
-        # Definir orden personalizado
         orden_lineas = ['ROCA', 'MITRE', 'SARMIENTO', 'SAN MARTIN', 'BELGRANO SUR', 'REGIONALES', 'CENTRAL']
         orden_categorias = ['COOR.E.T', 'INST.TEC', 'INS.CERT', 'CON.ELEC', 'CON.DIES', 'AY.CON.H', 'AY.CONDU']
         
@@ -111,12 +118,14 @@ if uploaded_file:
         # --- PREPARAR DATOS PARA DASHBOARD ---
         df_activos_actuales = df_base[df_base['Status ocupación'] == 'Activo']
         resumen_activos = pd.crosstab(df_activos_actuales['Categoría'], df_activos_actuales['Línea'], margins=True, margins_name="Total")
-        bajas_por_motivo = df_bajas['Motivo de la medida'].value_counts().reset_index().rename(columns={"count": "Cantidad"})
+        
+        bajas_por_motivo = df_bajas['Motivo de la medida'].value_counts().to_frame('Cantidad')
+        bajas_por_motivo.loc['Total'] = bajas_por_motivo['Cantidad'].sum()
 
         st.success("¡Archivo cargado y procesado con éxito!")
         
         # --- BOTÓN DE DESCARGA PDF ---
-        pdf_bytes = crear_pdf_resumen(len(df_altas), len(df_bajas), bajas_por_motivo, resumen_activos.drop('Total', axis=1).drop('Total', axis=0))
+        pdf_bytes = crear_pdf_resumen(len(df_altas), len(df_bajas), bajas_por_motivo, resumen_activos)
         st.download_button(
             label="📄 Descargar Resumen Ejecutivo en PDF",
             data=pdf_bytes,
@@ -146,13 +155,13 @@ if uploaded_file:
             st.subheader("Resumen de Novedades")
             col1, col2 = st.columns(2)
             with col1:
-                st.write("**Bajas por Grupo y Línea:**")
+                st.write("**Bajas por Categoría y Línea:**")
                 if not df_bajas.empty:
                     st.dataframe(pd.crosstab(df_bajas['Categoría'], df_bajas['Línea'], margins=True, margins_name="Total"))
                 else:
                     st.info("No hay bajas para resumir.")
             with col2:
-                st.write("**Altas por Grupo y Línea:**")
+                st.write("**Altas por Categoría y Línea:**")
                 if not df_altas.empty:
                     st.dataframe(pd.crosstab(df_altas['Categoría'], df_altas['Línea'], margins=True, margins_name="Total"))
                 else:
