@@ -61,7 +61,7 @@ def crear_pdf_resumen(n_altas, n_bajas, df_bajas_motivo, df_resumen_activos):
             pdf.ln()
 
     # Retorna el PDF como bytes
-    return pdf.output(dest='S').encode('latin-1')
+    return pdf.output(dest='S')
 
 # --- CONFIGURACIÓN E INTERFAZ DE LA APP ---
 st.set_page_config(page_title="Dashboard de Dotación", layout="wide")
