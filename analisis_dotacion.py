@@ -8,8 +8,7 @@ import io
 class PDF(FPDF):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Ancho de página usable (A4 apaisado: 297mm - 10mm margen izq - 10mm margen der)
-        self.page_width = 277
+        self.page_width = self.w - 2 * self.l_margin
 
     def header(self):
         self.set_font("Arial", "B", 16)
@@ -25,41 +24,35 @@ class PDF(FPDF):
         if df_original.empty:
             return
         
-        # Reemplazar 0 con '-' en una copia para no afectar cálculos en tablas de resumen
         df = df_original.copy()
         if is_crosstab:
             df = df.replace(0, '-')
 
-        # Verificar si la tabla cabe en la página actual
         table_height = 8 * (len(df) + 1) + 10
         if self.get_y() + table_height > self.h - self.b_margin:
             self.add_page(orientation=self.cur_orientation)
 
-        # Título de la sección
         self.set_font("Arial", "B", 14)
-        self.set_text_color(0, 51, 102) # Azul oscuro
+        self.set_text_color(0, 51, 102)
         self.cell(0, 10, title, ln=True, align="L")
         self.ln(2)
 
-        # --- Lógica de anchos de columna (mejorada para incluir el índice) ---
-        widths = {}
         df_for_width_calc = df.reset_index() if is_crosstab else df
-        
+        widths = {}
         for col in df_for_width_calc.columns:
-            header_width = self.get_string_width(str(col)) + 8 # Padding extra
+            header_width = self.get_string_width(str(col)) + 8
             content_width = df_for_width_calc[col].astype(str).apply(lambda x: self.get_string_width(x)).max() + 8
             widths[col] = max(header_width, content_width)
 
-        # --- Encabezado de la tabla ---
         self.set_font("Arial", "B", 9)
-        self.set_fill_color(70, 130, 180) # Celeste azulado
+        self.set_fill_color(70, 130, 180)
         self.set_text_color(255, 255, 255)
         
-        for col in df_for_width_calc.columns:
-            self.cell(widths[col], 8, str(col), 1, 0, "C", True)
+        # Usar los nombres de columna del dataframe que incluye el índice reseteado
+        for col_name in df_for_width_calc.columns:
+            self.cell(widths[col_name], 8, str(col_name), 1, 0, "C", True)
         self.ln()
         
-        # --- Cuerpo de la tabla ---
         self.set_text_color(0, 0, 0)
         for _, row in df_for_width_calc.iterrows():
             is_total_row = str(row.iloc[0]) == "Total"
@@ -68,8 +61,8 @@ class PDF(FPDF):
             else:
                 self.set_font("Arial", "", 9)
 
-            for col in df_for_width_calc.columns:
-                self.cell(widths[col], 8, str(row[col]), 1, 0, "C")
+            for col_name in df_for_width_calc.columns:
+                self.cell(widths[col_name], 8, str(row[col_name]), 1, 0, "C")
             self.ln()
         self.ln(10)
 
@@ -88,11 +81,12 @@ def crear_pdf_completo(df_altas, df_bajas, bajas_por_motivo, resumen_altas, resu
 
     pdf.draw_table("Detalle de Altas", df_altas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha', 'Línea', 'Categoría']])
     pdf.draw_table("Detalle de Bajas", df_bajas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Desde', 'Línea', 'Categoría']])
-    pdf.draw_table("Bajas por Motivo", bajas_por_motivo)
+    pdf.draw_table("Bajas por Motivo", bajas_por_motivo.rename(columns={'Motivo de la medida': 'Motivo'}))
     
-    pdf.draw_table("Resumen de Altas por Categoría y Línea", resumen_altas, is_crosstab=True)
-    pdf.draw_table("Resumen de Bajas por Categoría y Línea", resumen_bajas, is_crosstab=True)
-    pdf.draw_table("Composición de la Dotación Activa", resumen_activos, is_crosstab=True)
+    # Pasamos las tablas con el índice reseteado para que la función las dibuje correctamente
+    pdf.draw_table("Resumen de Altas por Categoría y Línea", resumen_altas.reset_index(), is_crosstab=True)
+    pdf.draw_table("Resumen de Bajas por Categoría y Línea", resumen_bajas.reset_index(), is_crosstab=True)
+    pdf.draw_table("Composición de la Dotación Activa", resumen_activos.reset_index(), is_crosstab=True)
 
     return bytes(pdf.output())
 
@@ -125,7 +119,6 @@ if uploaded_file:
                 df_base[col] = pd.to_datetime(df_base[col], errors='coerce').dt.date
         
         orden_lineas = ['ROCA', 'MITRE', 'SARMIENTO', 'SAN MARTIN', 'BELGRANO SUR', 'REGIONALES', 'CENTRAL']
-        # --- ORDEN DE CATEGORÍAS ACTUALIZADO ---
         orden_categorias = ['COOR.E.T', 'INST.TEC', 'INS.CERT', 'CON.ELEC', 'CON.DIES', 'AY.CON.H', 'AY.CONDU', 'ASP.AY.C']
         
         df_base['Línea'] = pd.Categorical(df_base['Línea'], categories=orden_lineas, ordered=True)
@@ -135,10 +128,11 @@ if uploaded_file:
         df_bajas = df_base[df_base['Nº pers.'].isin(activos_legajos) & (df_base['Status ocupación'] == 'Dado de baja')].copy()
         df_altas = df_base[~df_base['Nº pers.'].isin(activos_legajos) & (df_base['Status ocupación'] == 'Activo')].copy()
 
+        # --- PREPARAR DATOS PARA DASHBOARD (Quitamos dropna=False para que no muestre vacíos) ---
         df_activos_actuales = df_base[df_base['Status ocupación'] == 'Activo']
-        resumen_activos = pd.crosstab(df_activos_actuales['Categoría'], df_activos_actuales['Línea'], margins=True, margins_name="Total", dropna=False)
-        resumen_bajas = pd.crosstab(df_bajas['Categoría'], df_bajas['Línea'], margins=True, margins_name="Total", dropna=False)
-        resumen_altas = pd.crosstab(df_altas['Categoría'], df_altas['Línea'], margins=True, margins_name="Total", dropna=False)
+        resumen_activos = pd.crosstab(df_activos_actuales['Categoría'], df_activos_actuales['Línea'], margins=True, margins_name="Total")
+        resumen_bajas = pd.crosstab(df_bajas['Categoría'], df_bajas['Línea'], margins=True, margins_name="Total")
+        resumen_altas = pd.crosstab(df_altas['Categoría'], df_altas['Línea'], margins=True, margins_name="Total")
         
         bajas_por_motivo_series = df_bajas['Motivo de la medida'].value_counts()
         bajas_por_motivo = bajas_por_motivo_series.to_frame('Cantidad')
