@@ -4,59 +4,66 @@ from fpdf import FPDF
 from datetime import datetime
 import io
 
-# --- FUNCIÓN MEJORADA PARA CREAR EL PDF EJECUTIVO ---
+# --- CLASE MEJORADA PARA CREAR EL PDF EJECUTIVO ---
 class PDF(FPDF):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.page_width = self.w - 2 * self.l_margin
+
     def header(self):
-        self.set_font("Arial", "B", 12)
-        self.cell(0, 10, "Resúmen de Dotación", 0, 0, "C")
-        self.ln(20)
+        self.set_font("Arial", "B", 16)
+        self.cell(0, 10, "Resumen de Dotación", 0, 0, "C")
+        self.ln(15)
 
     def footer(self):
         self.set_y(-15)
         self.set_font("Arial", "I", 8)
         self.cell(0, 10, f"Página {self.page_no()}", 0, 0, "C")
 
-    def draw_table(self, title, df):
+    def draw_table(self, title, df, is_summary=False):
         if df.empty:
             return
-            
-        # Título de la sección
+        
+        table_height = 8 * (len(df) + 1) + 10
+        if self.get_y() + table_height > self.h - self.b_margin:
+            self.add_page(orientation=self.cur_orientation)
+
         self.set_font("Arial", "B", 14)
         self.set_text_color(0, 51, 102) # Azul oscuro
         self.cell(0, 10, title, ln=True, align="L")
         self.ln(2)
 
-        # Calcular anchos de columna dinámicamente
         widths = {}
-        # Usar el ancho del título o el contenido, el que sea mayor
         for col in df.columns:
-            widths[col] = max(self.get_string_width(col) + 6, max(df[col].astype(str).apply(lambda x: self.get_string_width(x))) + 6)
+            header_width = self.get_string_width(str(col)) + 6
+            content_width = df[col].astype(str).apply(lambda x: self.get_string_width(x)).max() + 6
+            widths[col] = max(header_width, content_width)
         
-        # Ancho total de la página usable
-        page_width = self.w - 2 * self.l_margin
-        
-        # Encabezado de la tabla
         self.set_font("Arial", "B", 9)
         self.set_fill_color(70, 130, 180) # Celeste azulado
-        self.set_text_color(255, 255, 255) # Texto blanco
+        self.set_text_color(255, 255, 255)
         for col in df.columns:
-            self.cell(widths[col], 8, col, 1, 0, "C", True)
+            self.cell(widths[col], 8, str(col), 1, 0, "C", True)
         self.ln()
         
-        # Cuerpo de la tabla
-        self.set_font("Arial", "", 9)
         self.set_text_color(0, 0, 0) # Texto negro
-        for _, row in df.iterrows():
+        for index, row in df.iterrows():
+            is_total_row = str(index) == "Total" or (is_summary and str(row.iloc[0]) == "Total")
+            if is_total_row:
+                self.set_font("Arial", "B", 9)
+            else:
+                self.set_font("Arial", "", 9)
+
             for col in df.columns:
                 self.cell(widths[col], 8, str(row[col]), 1, 0, "C")
             self.ln()
         self.ln(10)
 
-def crear_pdf_resumen(df_altas, df_bajas, bajas_por_motivo, resumen_altas, resumen_bajas, resumen_activos):
-    pdf = PDF()
+def crear_pdf_completo(df_altas, df_bajas, bajas_por_motivo, resumen_altas, resumen_bajas, resumen_activos):
+    # Crear todo el documento en formato Apaisado (Landscape)
+    pdf = PDF(orientation='L', unit='mm', format='A4')
     pdf.add_page()
     
-    # Indicadores Clave
     pdf.set_font("Arial", "B", 14)
     pdf.set_text_color(0, 51, 102)
     pdf.cell(0, 10, f"Período Analizado (Fecha: {datetime.now().strftime('%d/%m/%Y')})", ln=True)
@@ -66,16 +73,13 @@ def crear_pdf_resumen(df_altas, df_bajas, bajas_por_motivo, resumen_altas, resum
     pdf.cell(0, 8, f"- Cantidad de Bajas: {len(df_bajas)}", ln=True)
     pdf.ln(10)
 
-    # Dibujar todas las tablas
     pdf.draw_table("Detalle de Altas", df_altas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha', 'Línea', 'Categoría']])
     pdf.draw_table("Detalle de Bajas", df_bajas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Desde', 'Línea', 'Categoría']])
-    pdf.draw_table("Bajas por Motivo", bajas_por_motivo)
+    pdf.draw_table("Bajas por Motivo", bajas_por_motivo, is_summary=True)
     
-    # Las tablas de resumen pueden ser muy anchas, se añaden a una nueva página en horizontal si es necesario
-    pdf.add_page(orientation='L')
-    pdf.draw_table("Resumen de Altas por Categoría y Línea", resumen_altas)
-    pdf.draw_table("Resumen de Bajas por Categoría y Línea", resumen_bajas)
-    pdf.draw_table("Composición de la Dotación Activa", resumen_activos)
+    pdf.draw_table("Resumen de Altas por Categoría y Línea", resumen_altas, is_summary=True)
+    pdf.draw_table("Resumen de Bajas por Categoría y Línea", resumen_bajas, is_summary=True)
+    pdf.draw_table("Composición de la Dotación Activa", resumen_activos, is_summary=True)
 
     return bytes(pdf.output())
 
@@ -84,6 +88,7 @@ st.set_page_config(page_title="Dashboard de Dotación", layout="wide")
 
 st.markdown("""
 <style>
+/* Estilos CSS para un look más profesional */
 .main .block-container { padding-top: 2rem; padding-bottom: 2rem; background-color: #f0f2f6; }
 h1, h2, h3 { color: #003366; }
 div.stDownloadButton > button { background-color: #28a745; color: white; border-radius: 5px; font-weight: bold; }
@@ -129,12 +134,12 @@ if uploaded_file:
         bajas_por_motivo = bajas_por_motivo_series.to_frame('Cantidad')
         bajas_por_motivo.loc['Total'] = bajas_por_motivo_series.sum()
         bajas_por_motivo.reset_index(inplace=True)
-        bajas_por_motivo.rename(columns={'index': 'Motivo de la medida'}, inplace=True)
+        bajas_por_motivo.rename(columns={'index': 'Motivo'}, inplace=True)
 
         st.success("¡Archivo cargado y procesado!")
         
         # --- BOTÓN DE DESCARGA PDF ---
-        pdf_bytes = crear_pdf_resumen(df_altas, df_bajas, bajas_por_motivo, resumen_activos, resumen_bajas, resumen_altas)
+        pdf_bytes = crear_pdf_completo(df_altas, df_bajas, bajas_por_motivo, resumen_altas, resumen_bajas, resumen_activos)
         st.download_button(
             label="📄 Descargar Resumen en PDF",
             data=pdf_bytes,
@@ -147,7 +152,6 @@ if uploaded_file:
         tab1, tab2, tab3 = st.tabs(["▶️ Novedades (Detalle)", "📈 Dashboard de Resúmenes", "🔄 Actualizar Activos"])
         
         with tab1:
-            # ... (código sin cambios)
             st.header("Detalle de Novedades")
             st.subheader(f"Altas ({len(df_altas)})")
             st.dataframe(df_altas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha', 'Línea', 'Categoría']], hide_index=True)
@@ -155,7 +159,6 @@ if uploaded_file:
             st.dataframe(df_bajas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Desde', 'Línea', 'Categoría']], hide_index=True)
 
         with tab2:
-            # ... (código sin cambios)
             st.header("Dashboard de Resúmenes")
             st.subheader("Composición de la Dotación Activa")
             st.dataframe(resumen_activos)
@@ -171,7 +174,6 @@ if uploaded_file:
             st.dataframe(bajas_por_motivo, hide_index=True)
 
         with tab3:
-            # ... (código sin cambios)
             st.header("Actualizar Lista de Activos")
             st.info("Haz clic para descargar el archivo Excel con los legajos que quedaron activos para tu próximo análisis.")
             df_nuevos_activos = df_base[df_base['Status ocupación'] == 'Activo'][['Nº pers.']]
