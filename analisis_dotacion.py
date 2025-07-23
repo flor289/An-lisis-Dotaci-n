@@ -20,49 +20,51 @@ class PDF(FPDF):
         self.set_font("Arial", "I", 8)
         self.cell(0, 10, f"Página {self.page_no()}", 0, 0, "C")
 
-    def draw_table(self, title, df_original, is_crosstab=False):
+    def draw_table(self, title, df_original):
         if df_original.empty:
             return
         
-        df = df_original.copy()
-        if is_crosstab:
-            df = df.replace(0, '-')
-
+        # Copia para manipular y reemplazar 0s
+        df = df_original.copy().replace(0, '-')
+        
+        # Unificar el tratamiento: si tiene un nombre de índice, lo reseteamos para tratarlo como columna
+        if df.index.name:
+            df.reset_index(inplace=True)
+        
+        # Verificar si la tabla cabe en la página actual
         table_height = 8 * (len(df) + 1) + 10
         if self.get_y() + table_height > self.h - self.b_margin:
             self.add_page(orientation=self.cur_orientation)
 
+        # Título de la sección
         self.set_font("Arial", "B", 14)
         self.set_text_color(0, 51, 102)
         self.cell(0, 10, title, ln=True, align="L")
         self.ln(2)
 
-        df_for_width_calc = df.reset_index() if is_crosstab else df
-        widths = {}
-        for col in df_for_width_calc.columns:
-            header_width = self.get_string_width(str(col)) + 8
-            content_width = df_for_width_calc[col].astype(str).apply(lambda x: self.get_string_width(x)).max() + 8
-            widths[col] = max(header_width, content_width)
-
+        # Calcular anchos de columna dinámicamente
+        widths = {col: max(self.get_string_width(str(col)) + 8, df[col].astype(str).apply(lambda x: self.get_string_width(x)).max() + 8) for col in df.columns}
+        
+        # Encabezado de la tabla
         self.set_font("Arial", "B", 9)
         self.set_fill_color(70, 130, 180)
         self.set_text_color(255, 255, 255)
-        
-        # Usar los nombres de columna del dataframe que incluye el índice reseteado
-        for col_name in df_for_width_calc.columns:
-            self.cell(widths[col_name], 8, str(col_name), 1, 0, "C", True)
+        for col in df.columns:
+            self.cell(widths[col], 8, str(col), 1, 0, "C", True)
         self.ln()
         
+        # Cuerpo de la tabla
         self.set_text_color(0, 0, 0)
-        for _, row in df_for_width_calc.iterrows():
-            is_total_row = str(row.iloc[0]) == "Total"
+        for _, row in df.iterrows():
+            # Poner la fila "Total" en negrita
+            is_total_row = "Total" in str(row.iloc[0])
             if is_total_row:
                 self.set_font("Arial", "B", 9)
             else:
                 self.set_font("Arial", "", 9)
 
-            for col_name in df_for_width_calc.columns:
-                self.cell(widths[col_name], 8, str(row[col_name]), 1, 0, "C")
+            for col in df.columns:
+                self.cell(widths[col], 8, str(row[col]), 1, 0, "C")
             self.ln()
         self.ln(10)
 
@@ -81,12 +83,11 @@ def crear_pdf_completo(df_altas, df_bajas, bajas_por_motivo, resumen_altas, resu
 
     pdf.draw_table("Detalle de Altas", df_altas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha', 'Línea', 'Categoría']])
     pdf.draw_table("Detalle de Bajas", df_bajas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Desde', 'Línea', 'Categoría']])
-    pdf.draw_table("Bajas por Motivo", bajas_por_motivo.rename(columns={'Motivo de la medida': 'Motivo'}))
+    pdf.draw_table("Bajas por Motivo", bajas_por_motivo)
     
-    # Pasamos las tablas con el índice reseteado para que la función las dibuje correctamente
-    pdf.draw_table("Resumen de Altas por Categoría y Línea", resumen_altas.reset_index(), is_crosstab=True)
-    pdf.draw_table("Resumen de Bajas por Categoría y Línea", resumen_bajas.reset_index(), is_crosstab=True)
-    pdf.draw_table("Composición de la Dotación Activa", resumen_activos.reset_index(), is_crosstab=True)
+    pdf.draw_table("Resumen de Altas por Categoría y Línea", resumen_altas)
+    pdf.draw_table("Resumen de Bajas por Categoría y Línea", resumen_bajas)
+    pdf.draw_table("Composición de la Dotación Activa", resumen_activos)
 
     return bytes(pdf.output())
 
@@ -95,6 +96,7 @@ st.set_page_config(page_title="Dashboard de Dotación", layout="wide")
 
 st.markdown("""
 <style>
+/* Estilos CSS para un look más profesional */
 .main .block-container { padding-top: 2rem; padding-bottom: 2rem; background-color: #f0f2f6; }
 h1, h2, h3 { color: #003366; }
 div.stDownloadButton > button { background-color: #28a745; color: white; border-radius: 5px; font-weight: bold; }
@@ -128,7 +130,7 @@ if uploaded_file:
         df_bajas = df_base[df_base['Nº pers.'].isin(activos_legajos) & (df_base['Status ocupación'] == 'Dado de baja')].copy()
         df_altas = df_base[~df_base['Nº pers.'].isin(activos_legajos) & (df_base['Status ocupación'] == 'Activo')].copy()
 
-        # --- PREPARAR DATOS PARA DASHBOARD (Quitamos dropna=False para que no muestre vacíos) ---
+        # --- PREPARAR DATOS PARA DASHBOARD ---
         df_activos_actuales = df_base[df_base['Status ocupación'] == 'Activo']
         resumen_activos = pd.crosstab(df_activos_actuales['Categoría'], df_activos_actuales['Línea'], margins=True, margins_name="Total")
         resumen_bajas = pd.crosstab(df_bajas['Categoría'], df_bajas['Línea'], margins=True, margins_name="Total")
@@ -138,8 +140,7 @@ if uploaded_file:
         bajas_por_motivo = bajas_por_motivo_series.to_frame('Cantidad')
         if not bajas_por_motivo.empty:
             bajas_por_motivo.loc['Total'] = bajas_por_motivo_series.sum()
-        bajas_por_motivo.reset_index(inplace=True)
-        bajas_por_motivo.rename(columns={'index': 'Motivo'}, inplace=True)
+        bajas_por_motivo.index.name = "Motivo" # Le damos un nombre al índice para que la función PDF lo use
 
         st.success("¡Archivo cargado y procesado!")
         
@@ -174,7 +175,7 @@ if uploaded_file:
                 st.write("**Altas por Categoría y Línea:**")
                 st.dataframe(resumen_altas.replace(0, '-'))
             st.write("**Bajas por Motivo:**")
-            st.dataframe(bajas_por_motivo, hide_index=True)
+            st.dataframe(bajas_por_motivo, hide_index=False) # Mostramos el índice que ahora es el Motivo
 
         with tab3:
             st.header("Actualizar Lista de Activos")
