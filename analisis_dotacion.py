@@ -141,11 +141,11 @@ if uploaded_file:
             st.header("Detalle de Novedades")
             st.subheader(f"Altas ({len(df_altas)})")
             if not df_altas.empty:
-                st.dataframe(df_altas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha', 'Línea', 'Categoría']])
+                st.dataframe(df_altas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha', 'Línea', 'Categoría']], hide_index=True)
             
             st.subheader(f"Bajas ({len(df_bajas)})")
             if not df_bajas.empty:
-                st.dataframe(df_bajas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Desde', 'Línea', 'Categoría']])
+                st.dataframe(df_bajas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Desde', 'Línea', 'Categoría']], hide_index=True)
 
         with tab2:
             st.header("Dashboard de Resúmenes")
