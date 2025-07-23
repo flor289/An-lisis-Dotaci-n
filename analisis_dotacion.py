@@ -2,60 +2,80 @@ import streamlit as st
 import pandas as pd
 from fpdf import FPDF
 from datetime import datetime
+import io
 
-# --- FUNCIÓN PARA CREAR EL PDF EJECUTIVO ---
-def crear_pdf_resumen(n_altas, n_bajas, df_bajas_motivo, df_resumen_activos):
-    pdf = FPDF()
+# --- FUNCIÓN MEJORADA PARA CREAR EL PDF EJECUTIVO ---
+class PDF(FPDF):
+    def header(self):
+        self.set_font("Arial", "B", 12)
+        self.cell(0, 10, "Resúmen de Dotación", 0, 0, "C")
+        self.ln(20)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font("Arial", "I", 8)
+        self.cell(0, 10, f"Página {self.page_no()}", 0, 0, "C")
+
+    def draw_table(self, title, df):
+        if df.empty:
+            return
+            
+        # Título de la sección
+        self.set_font("Arial", "B", 14)
+        self.set_text_color(0, 51, 102) # Azul oscuro
+        self.cell(0, 10, title, ln=True, align="L")
+        self.ln(2)
+
+        # Calcular anchos de columna dinámicamente
+        widths = {}
+        # Usar el ancho del título o el contenido, el que sea mayor
+        for col in df.columns:
+            widths[col] = max(self.get_string_width(col) + 6, max(df[col].astype(str).apply(lambda x: self.get_string_width(x))) + 6)
+        
+        # Ancho total de la página usable
+        page_width = self.w - 2 * self.l_margin
+        
+        # Encabezado de la tabla
+        self.set_font("Arial", "B", 9)
+        self.set_fill_color(70, 130, 180) # Celeste azulado
+        self.set_text_color(255, 255, 255) # Texto blanco
+        for col in df.columns:
+            self.cell(widths[col], 8, col, 1, 0, "C", True)
+        self.ln()
+        
+        # Cuerpo de la tabla
+        self.set_font("Arial", "", 9)
+        self.set_text_color(0, 0, 0) # Texto negro
+        for _, row in df.iterrows():
+            for col in df.columns:
+                self.cell(widths[col], 8, str(row[col]), 1, 0, "C")
+            self.ln()
+        self.ln(10)
+
+def crear_pdf_resumen(df_altas, df_bajas, bajas_por_motivo, resumen_altas, resumen_bajas, resumen_activos):
+    pdf = PDF()
     pdf.add_page()
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(0, 10, "Resumen Ejecutivo de Dotación", ln=True, align="C")
-    pdf.set_font("Arial", "", 11)
-    pdf.cell(0, 8, f"Fecha de generación: {datetime.now().strftime('%d/%m/%Y')}", ln=True, align="C")
+    
+    # Indicadores Clave
+    pdf.set_font("Arial", "B", 14)
+    pdf.set_text_color(0, 51, 102)
+    pdf.cell(0, 10, f"Período Analizado (Fecha: {datetime.now().strftime('%d/%m/%Y')})", ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.set_text_color(0, 0, 0)
+    pdf.cell(0, 8, f"- Cantidad de Altas: {len(df_altas)}", ln=True)
+    pdf.cell(0, 8, f"- Cantidad de Bajas: {len(df_bajas)}", ln=True)
     pdf.ln(10)
 
-    pdf.set_font("Arial", "B", 14)
-    pdf.cell(0, 10, "Indicadores Clave del Periodo", ln=True)
-    pdf.set_font("Arial", "", 12)
-    pdf.cell(0, 8, f"- Cantidad de Altas: {n_altas}", ln=True)
-    pdf.cell(0, 8, f"- Cantidad de Bajas: {n_bajas}", ln=True)
-    pdf.ln(8)
-
-    if not df_bajas_motivo.empty:
-        pdf.set_font("Arial", "B", 14)
-        pdf.cell(0, 10, "Desglose de Bajas por Motivo", ln=True)
-        pdf.set_font("Arial", "B", 10)
-        pdf.cell(130, 8, "Motivo", 1)
-        pdf.cell(40, 8, "Cantidad", 1, ln=True, align="C")
-        
-        for index, row in df_bajas_motivo.iterrows():
-            # Poner la fila "Total" en negrita
-            if index == "Total":
-                pdf.set_font("Arial", "B", 10)
-            else:
-                pdf.set_font("Arial", "", 10)
-            pdf.cell(130, 8, str(index), 1)
-            pdf.cell(40, 8, str(row['Cantidad']), 1, ln=True, align="C")
-        pdf.ln(8)
-
-    if not df_resumen_activos.empty:
-        pdf.set_font("Arial", "B", 14)
-        pdf.cell(0, 10, "Composición de la Dotación Activa", ln=True)
-        pdf.set_font("Arial", "B", 8)
-        header = ['Categoría'] + list(df_resumen_activos.columns)
-        col_width = 180 / len(header)
-        for item in header:
-            pdf.cell(col_width, 8, str(item), 1, align="C")
-        pdf.ln()
-        
-        for index, row in df_resumen_activos.iterrows():
-            if index == "Total":
-                pdf.set_font("Arial", "B", 8)
-            else:
-                pdf.set_font("Arial", "", 8)
-            pdf.cell(col_width, 8, str(index), 1)
-            for item in row:
-                pdf.cell(col_width, 8, str(item), 1, align="C")
-            pdf.ln()
+    # Dibujar todas las tablas
+    pdf.draw_table("Detalle de Altas", df_altas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha', 'Línea', 'Categoría']])
+    pdf.draw_table("Detalle de Bajas", df_bajas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Desde', 'Línea', 'Categoría']])
+    pdf.draw_table("Bajas por Motivo", bajas_por_motivo)
+    
+    # Las tablas de resumen pueden ser muy anchas, se añaden a una nueva página en horizontal si es necesario
+    pdf.add_page(orientation='L')
+    pdf.draw_table("Resumen de Altas por Categoría y Línea", resumen_altas)
+    pdf.draw_table("Resumen de Bajas por Categoría y Línea", resumen_bajas)
+    pdf.draw_table("Composición de la Dotación Activa", resumen_activos)
 
     return bytes(pdf.output())
 
@@ -64,32 +84,16 @@ st.set_page_config(page_title="Dashboard de Dotación", layout="wide")
 
 st.markdown("""
 <style>
-/* Estilos CSS para un look más profesional */
-.main .block-container {
-    padding-top: 2rem;
-    padding-bottom: 2rem;
-    background-color: #f0f2f6; 
-}
-h1, h2, h3 {
-    color: #003366; /* Azul corporativo */
-}
-div.stDownloadButton > button {
-    background-color: #28a745; /* Verde para acción principal */
-    color: white;
-    border-radius: 5px;
-    font-weight: bold;
-}
+.main .block-container { padding-top: 2rem; padding-bottom: 2rem; background-color: #f0f2f6; }
+h1, h2, h3 { color: #003366; }
+div.stDownloadButton > button { background-color: #28a745; color: white; border-radius: 5px; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
 st.title("📊 Dashboard de Control de Dotación")
 st.write("Sube tu archivo Excel para analizar las novedades y ver resúmenes.")
 
-uploaded_file = st.file_uploader(
-    "Selecciona tu archivo Excel de dotación", 
-    type=['xlsx'],
-    key="uploader"
-)
+uploaded_file = st.file_uploader("Selecciona tu archivo Excel", type=['xlsx'], key="uploader")
 
 if uploaded_file:
     try:
@@ -118,18 +122,23 @@ if uploaded_file:
         # --- PREPARAR DATOS PARA DASHBOARD ---
         df_activos_actuales = df_base[df_base['Status ocupación'] == 'Activo']
         resumen_activos = pd.crosstab(df_activos_actuales['Categoría'], df_activos_actuales['Línea'], margins=True, margins_name="Total")
+        resumen_bajas = pd.crosstab(df_bajas['Categoría'], df_bajas['Línea'], margins=True, margins_name="Total")
+        resumen_altas = pd.crosstab(df_altas['Categoría'], df_altas['Línea'], margins=True, margins_name="Total")
         
-        bajas_por_motivo = df_bajas['Motivo de la medida'].value_counts().to_frame('Cantidad')
-        bajas_por_motivo.loc['Total'] = bajas_por_motivo['Cantidad'].sum()
+        bajas_por_motivo_series = df_bajas['Motivo de la medida'].value_counts()
+        bajas_por_motivo = bajas_por_motivo_series.to_frame('Cantidad')
+        bajas_por_motivo.loc['Total'] = bajas_por_motivo_series.sum()
+        bajas_por_motivo.reset_index(inplace=True)
+        bajas_por_motivo.rename(columns={'index': 'Motivo de la medida'}, inplace=True)
 
-        st.success("¡Archivo cargado y procesado con éxito!")
+        st.success("¡Archivo cargado y procesado!")
         
         # --- BOTÓN DE DESCARGA PDF ---
-        pdf_bytes = crear_pdf_resumen(len(df_altas), len(df_bajas), bajas_por_motivo, resumen_activos)
+        pdf_bytes = crear_pdf_resumen(df_altas, df_bajas, bajas_por_motivo, resumen_activos, resumen_bajas, resumen_altas)
         st.download_button(
-            label="📄 Descargar Resumen Ejecutivo en PDF",
+            label="📄 Descargar Resumen en PDF",
             data=pdf_bytes,
-            file_name=f"Resumen_Ejecutivo_Dotacion_{datetime.now().strftime('%Y%m%d')}.pdf",
+            file_name=f"Resumen_Dotacion_{datetime.now().strftime('%Y%m%d')}.pdf",
             mime="application/pdf",
         )
         st.markdown("---")
@@ -138,50 +147,44 @@ if uploaded_file:
         tab1, tab2, tab3 = st.tabs(["▶️ Novedades (Detalle)", "📈 Dashboard de Resúmenes", "🔄 Actualizar Activos"])
         
         with tab1:
+            # ... (código sin cambios)
             st.header("Detalle de Novedades")
             st.subheader(f"Altas ({len(df_altas)})")
-            if not df_altas.empty:
-                st.dataframe(df_altas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha', 'Línea', 'Categoría']], hide_index=True)
-            
+            st.dataframe(df_altas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha', 'Línea', 'Categoría']], hide_index=True)
             st.subheader(f"Bajas ({len(df_bajas)})")
-            if not df_bajas.empty:
-                st.dataframe(df_bajas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Desde', 'Línea', 'Categoría']], hide_index=True)
+            st.dataframe(df_bajas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Desde', 'Línea', 'Categoría']], hide_index=True)
 
         with tab2:
+            # ... (código sin cambios)
             st.header("Dashboard de Resúmenes")
             st.subheader("Composición de la Dotación Activa")
             st.dataframe(resumen_activos)
-            
             st.subheader("Resumen de Novedades")
             col1, col2 = st.columns(2)
             with col1:
                 st.write("**Bajas por Categoría y Línea:**")
-                if not df_bajas.empty:
-                    st.dataframe(pd.crosstab(df_bajas['Categoría'], df_bajas['Línea'], margins=True, margins_name="Total"))
-                else:
-                    st.info("No hay bajas para resumir.")
+                st.dataframe(resumen_bajas)
             with col2:
                 st.write("**Altas por Categoría y Línea:**")
-                if not df_altas.empty:
-                    st.dataframe(pd.crosstab(df_altas['Categoría'], df_altas['Línea'], margins=True, margins_name="Total"))
-                else:
-                    st.info("No hay altas para resumir.")
-            
+                st.dataframe(resumen_altas)
             st.write("**Bajas por Motivo:**")
-            if not bajas_por_motivo.empty:
-                st.dataframe(bajas_por_motivo)
+            st.dataframe(bajas_por_motivo, hide_index=True)
 
         with tab3:
+            # ... (código sin cambios)
             st.header("Actualizar Lista de Activos")
-            st.info("Haz clic para descargar la lista de legajos que quedaron activos para tu próximo análisis.")
+            st.info("Haz clic para descargar el archivo Excel con los legajos que quedaron activos para tu próximo análisis.")
             df_nuevos_activos = df_base[df_base['Status ocupación'] == 'Activo'][['Nº pers.']]
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df_nuevos_activos.to_excel(writer, index=False, sheet_name='Activos')
             st.download_button(
-                label="📥 Descargar 'Activos_actualizados.csv'",
-                data=df_nuevos_activos.to_csv(index=False).encode('utf-8'),
-                file_name='Activos_actualizados.csv',
-                mime='text/csv',
+                label="📥 Descargar 'Activos_actualizados.xlsx'",
+                data=output.getvalue(),
+                file_name='Activos_actualizados.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             )
             
     except Exception as e:
         st.error(f"Ocurrió un error: {e}")
-        st.warning("Verifica que tu archivo Excel contenga las pestañas 'Activos' y 'BaseQuery' y los nombres de columnas correctos.")
+        st.warning("Verifica que tu archivo Excel contenga las pestañas 'Activos' y 'BaseQuery'.")
