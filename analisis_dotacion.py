@@ -20,48 +20,51 @@ class PDF(FPDF):
         self.set_font("Arial", "I", 8)
         self.cell(0, 10, f"Página {self.page_no()}", 0, 0, "C")
 
-    def draw_table(self, title, df_original):
+    def draw_table(self, title, df_original, is_crosstab=False):
         if df_original.empty:
             return
         
-        # Copia para manipular y reemplazar 0s
-        df = df_original.copy().replace(0, '-')
+        df = df_original.copy()
+        if is_crosstab:
+            df = df.replace(0, '-')
         
-        # Unificar el tratamiento: si tiene un nombre de índice, lo reseteamos para tratarlo como columna
         if df.index.name:
             df.reset_index(inplace=True)
         
-        # Verificar si la tabla cabe en la página actual
         table_height = 8 * (len(df) + 1) + 10
         if self.get_y() + table_height > self.h - self.b_margin:
             self.add_page(orientation=self.cur_orientation)
 
-        # Título de la sección
         self.set_font("Arial", "B", 14)
         self.set_text_color(0, 51, 102)
         self.cell(0, 10, title, ln=True, align="L")
         self.ln(2)
 
-        # Calcular anchos de columna dinámicamente
+        # --- Lógica de anchos de columna con autoajuste ---
         widths = {col: max(self.get_string_width(str(col)) + 8, df[col].astype(str).apply(lambda x: self.get_string_width(x)).max() + 8) for col in df.columns}
+        total_width = sum(widths.values())
         
-        # Encabezado de la tabla
-        self.set_font("Arial", "B", 9)
+        font_size = 9
+        if total_width > self.page_width:
+            scaling_factor = self.page_width / total_width
+            widths = {k: v * scaling_factor for k, v in widths.items()}
+            font_size = 7 # Reducir la fuente si la tabla es muy ancha
+
+        self.set_font("Arial", "B", font_size)
         self.set_fill_color(70, 130, 180)
         self.set_text_color(255, 255, 255)
+        
         for col in df.columns:
             self.cell(widths[col], 8, str(col), 1, 0, "C", True)
         self.ln()
         
-        # Cuerpo de la tabla
         self.set_text_color(0, 0, 0)
         for _, row in df.iterrows():
-            # Poner la fila "Total" en negrita
             is_total_row = "Total" in str(row.iloc[0])
             if is_total_row:
-                self.set_font("Arial", "B", 9)
+                self.set_font("Arial", "B", font_size)
             else:
-                self.set_font("Arial", "", 9)
+                self.set_font("Arial", "", font_size)
 
             for col in df.columns:
                 self.cell(widths[col], 8, str(row[col]), 1, 0, "C")
@@ -85,9 +88,9 @@ def crear_pdf_completo(df_altas, df_bajas, bajas_por_motivo, resumen_altas, resu
     pdf.draw_table("Detalle de Bajas", df_bajas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Desde', 'Línea', 'Categoría']])
     pdf.draw_table("Bajas por Motivo", bajas_por_motivo)
     
-    pdf.draw_table("Resumen de Altas por Categoría y Línea", resumen_altas)
-    pdf.draw_table("Resumen de Bajas por Categoría y Línea", resumen_bajas)
-    pdf.draw_table("Composición de la Dotación Activa", resumen_activos)
+    pdf.draw_table("Resumen de Altas por Categoría y Línea", resumen_altas, is_crosstab=True)
+    pdf.draw_table("Resumen de Bajas por Categoría y Línea", resumen_bajas, is_crosstab=True)
+    pdf.draw_table("Composición de la Dotación Activa", resumen_activos, is_crosstab=True)
 
     return bytes(pdf.output())
 
@@ -140,7 +143,7 @@ if uploaded_file:
         bajas_por_motivo = bajas_por_motivo_series.to_frame('Cantidad')
         if not bajas_por_motivo.empty:
             bajas_por_motivo.loc['Total'] = bajas_por_motivo_series.sum()
-        bajas_por_motivo.index.name = "Motivo" # Le damos un nombre al índice para que la función PDF lo use
+        bajas_por_motivo.index.name = "Motivo"
 
         st.success("¡Archivo cargado y procesado!")
         
@@ -175,7 +178,7 @@ if uploaded_file:
                 st.write("**Altas por Categoría y Línea:**")
                 st.dataframe(resumen_altas.replace(0, '-'))
             st.write("**Bajas por Motivo:**")
-            st.dataframe(bajas_por_motivo, hide_index=False) # Mostramos el índice que ahora es el Motivo
+            st.dataframe(bajas_por_motivo)
 
         with tab3:
             st.header("Actualizar Lista de Activos")
