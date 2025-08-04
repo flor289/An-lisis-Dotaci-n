@@ -40,7 +40,13 @@ class PDF(FPDF):
         self.cell(0, 10, title, ln=True, align="L")
         self.ln(2)
 
-        widths = {col: max(self.get_string_width(str(col)) + 8, df[col].astype(str).apply(lambda x: self.get_string_width(x)).max() + 8) for col in df.columns}
+        df_formatted = df.copy()
+        for col in df_formatted.columns:
+             if pd.api.types.is_numeric_dtype(df_formatted[col]):
+                  df_formatted[col] = df_formatted[col].apply(lambda x: f"{x:,.0f}".replace(',', '.') if isinstance(x, (int, float)) and x != 0 else x)
+
+
+        widths = {col: max(self.get_string_width(str(col)) + 8, df_formatted[col].astype(str).apply(lambda x: self.get_string_width(x)).max() + 8) for col in df_formatted.columns}
         total_width = sum(widths.values())
         
         font_size = 9
@@ -53,26 +59,20 @@ class PDF(FPDF):
         self.set_fill_color(70, 130, 180)
         self.set_text_color(255, 255, 255)
         
-        for col in df.columns:
+        for col in df_formatted.columns:
             self.cell(widths[col], 8, str(col), 1, 0, "C", True)
         self.ln()
         
         self.set_text_color(0, 0, 0)
-        for _, row in df.iterrows():
+        for _, row in df_formatted.iterrows():
             is_total_row = "Total" in str(row.iloc[0])
             if is_total_row:
                 self.set_font("Arial", "B", font_size)
             else:
                 self.set_font("Arial", "", font_size)
 
-            for col in df.columns:
-                content = row[col]
-                # Formatear solo si es un número entero
-                if isinstance(content, (int, float)):
-                    formatted_content = f"{content:,.0f}".replace(',', '.')
-                else:
-                    formatted_content = str(content)
-                self.cell(widths[col], 8, formatted_content, 1, 0, "C")
+            for col in df_formatted.columns:
+                self.cell(widths[col], 8, str(row[col]), 1, 0, "C")
             self.ln()
         self.ln(10)
 
@@ -91,7 +91,7 @@ def crear_pdf_completo(df_altas, df_bajas, bajas_por_motivo, resumen_altas, resu
 
     pdf.draw_table("Detalle de Altas", df_altas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha', 'Línea', 'Categoría']])
     pdf.draw_table("Detalle de Bajas", df_bajas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Desde', 'Línea', 'Categoría']])
-    pdf.draw_table("Bajas por Motivo", bajas_por_motivo)
+    pdf.draw_table("Bajas por Motivo", bajas_por_motivo, is_crosstab=True)
     
     pdf.draw_table("Resumen de Altas por Categoría y Línea", resumen_altas, is_crosstab=True)
     pdf.draw_table("Resumen de Bajas por Categoría y Línea", resumen_bajas, is_crosstab=True)
@@ -165,8 +165,7 @@ if uploaded_file:
         tab1, tab2, tab3 = st.tabs(["▶️ Novedades (Detalle)", "📈 Dashboard de Resúmenes", "🔄 Actualizar Activos"])
         
         # --- Formateador para las tablas de Streamlit ---
-        def format_numbers(df):
-            return df.style.format(formatter="{:,.0f}".replace(",", "."), na_rep="-")
+        formatter = lambda x: f'{x:,.0f}'.replace(',', '.') if isinstance(x, (int, float)) else x
 
         with tab1:
             st.header("Detalle de Novedades")
@@ -178,17 +177,17 @@ if uploaded_file:
         with tab2:
             st.header("Dashboard de Resúmenes")
             st.subheader("Composición de la Dotación Activa")
-            st.dataframe(format_numbers(resumen_activos.replace(0, '-')))
+            st.dataframe(resumen_activos.replace(0, '-').style.format(formatter))
             st.subheader("Resumen de Novedades")
             col1, col2 = st.columns(2)
             with col1:
                 st.write("**Bajas por Categoría y Línea:**")
-                st.dataframe(format_numbers(resumen_bajas.replace(0, '-')))
+                st.dataframe(resumen_bajas.replace(0, '-').style.format(formatter))
             with col2:
                 st.write("**Altas por Categoría y Línea:**")
-                st.dataframe(format_numbers(resumen_altas.replace(0, '-')))
+                st.dataframe(resumen_altas.replace(0, '-').style.format(formatter))
             st.write("**Bajas por Motivo:**")
-            st.dataframe(bajas_por_motivo)
+            st.dataframe(bajas_por_motivo.style.format(formatter))
 
         with tab3:
             st.header("Actualizar Lista de Activos")
