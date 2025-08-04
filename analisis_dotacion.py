@@ -40,7 +40,6 @@ class PDF(FPDF):
         self.cell(0, 10, title, ln=True, align="L")
         self.ln(2)
 
-        # --- Lógica de anchos de columna con autoajuste ---
         widths = {col: max(self.get_string_width(str(col)) + 8, df[col].astype(str).apply(lambda x: self.get_string_width(x)).max() + 8) for col in df.columns}
         total_width = sum(widths.values())
         
@@ -48,7 +47,7 @@ class PDF(FPDF):
         if total_width > self.page_width:
             scaling_factor = self.page_width / total_width
             widths = {k: v * scaling_factor for k, v in widths.items()}
-            font_size = 7 # Reducir la fuente si la tabla es muy ancha
+            font_size = 7
 
         self.set_font("Arial", "B", font_size)
         self.set_fill_color(70, 130, 180)
@@ -67,7 +66,13 @@ class PDF(FPDF):
                 self.set_font("Arial", "", font_size)
 
             for col in df.columns:
-                self.cell(widths[col], 8, str(row[col]), 1, 0, "C")
+                content = row[col]
+                # Formatear solo si es un número entero
+                if isinstance(content, (int, float)):
+                    formatted_content = f"{content:,.0f}".replace(',', '.')
+                else:
+                    formatted_content = str(content)
+                self.cell(widths[col], 8, formatted_content, 1, 0, "C")
             self.ln()
         self.ln(10)
 
@@ -147,7 +152,7 @@ if uploaded_file:
 
         st.success("¡Archivo cargado y procesado!")
         
-        pdf_bytes = crear_pdf_completo(df_altas, df_bajas, bajas_por_motivo, resumen_altas, resumen_bajas, resumen_activos)
+        pdf_bytes = crear_pdf_completo(df_altas, df_bajas, bajas_por_motivo.reset_index(), resumen_altas, resumen_bajas, resumen_activos)
         st.download_button(
             label="📄 Descargar Resumen en PDF",
             data=pdf_bytes,
@@ -156,8 +161,13 @@ if uploaded_file:
         )
         st.markdown("---")
 
+        # --- PESTAÑAS DE NAVEGACIÓN ---
         tab1, tab2, tab3 = st.tabs(["▶️ Novedades (Detalle)", "📈 Dashboard de Resúmenes", "🔄 Actualizar Activos"])
         
+        # --- Formateador para las tablas de Streamlit ---
+        def format_numbers(df):
+            return df.style.format(formatter="{:,.0f}".replace(",", "."), na_rep="-")
+
         with tab1:
             st.header("Detalle de Novedades")
             st.subheader(f"Altas ({len(df_altas)})")
@@ -168,15 +178,15 @@ if uploaded_file:
         with tab2:
             st.header("Dashboard de Resúmenes")
             st.subheader("Composición de la Dotación Activa")
-            st.dataframe(resumen_activos.replace(0, '-'))
+            st.dataframe(format_numbers(resumen_activos.replace(0, '-')))
             st.subheader("Resumen de Novedades")
             col1, col2 = st.columns(2)
             with col1:
                 st.write("**Bajas por Categoría y Línea:**")
-                st.dataframe(resumen_bajas.replace(0, '-'))
+                st.dataframe(format_numbers(resumen_bajas.replace(0, '-')))
             with col2:
                 st.write("**Altas por Categoría y Línea:**")
-                st.dataframe(resumen_altas.replace(0, '-'))
+                st.dataframe(format_numbers(resumen_altas.replace(0, '-')))
             st.write("**Bajas por Motivo:**")
             st.dataframe(bajas_por_motivo)
 
