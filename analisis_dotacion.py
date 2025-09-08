@@ -18,7 +18,6 @@ class PDF(FPDF):
     def footer(self):
         self.set_y(-15)
         self.set_font("Arial", "I", 8)
-        # Numeración sin la palabra "Página"
         self.cell(0, 10, str(self.page_no()), 0, 0, "C")
 
     def draw_table(self, title, df_original, is_crosstab=False):
@@ -43,7 +42,7 @@ class PDF(FPDF):
 
         df_formatted = df.copy()
         for col in df_formatted.columns:
-             if pd.api.types.is_numeric_dtype(df_formatted[col]) and col != 'Nº pers.':
+             if pd.api.types.is_numeric_dtype(df_formatted[col]) and col not in ['Nº pers.', 'Antigüedad']:
                   df_formatted[col] = df_formatted[col].apply(lambda x: f"{x:,.0f}".replace(',', '.') if isinstance(x, (int, float)) else x)
 
         widths = {col: max(self.get_string_width(str(col)) + 8, df_formatted[col].astype(str).apply(lambda x: self.get_string_width(x)).max() + 8) for col in df_formatted.columns}
@@ -78,16 +77,15 @@ class PDF(FPDF):
 
 def crear_pdf_completo(df_altas, df_bajas, bajas_por_motivo, resumen_altas, resumen_bajas, resumen_activos):
     pdf = PDF(orientation='L', unit='mm', format='A4')
-    
-    # --- PÁGINA 1 (ANTES PÁGINA 2): RESÚMENES ---
-    pdf.add_page()
     fecha_actual_str = datetime.now().strftime('%d/%m/%Y')
-    
-    pdf.draw_table(f"Resumen de Bajas por Categoría y Línea (Fecha: {fecha_actual_str})", resumen_bajas.reset_index(), is_crosstab=True)
-    pdf.draw_table("Resumen de Altas por Categoría y Línea", resumen_altas.reset_index(), is_crosstab=True)
-    pdf.draw_table("Composición de la Dotación Activa", resumen_activos.reset_index(), is_crosstab=True)
 
-    # --- PÁGINA 2 (ANTES PÁGINA 1): DETALLES ---
+    # --- PÁGINA 1: RESÚMENES ---
+    pdf.add_page()
+    pdf.draw_table(f"Resumen de Bajas por Categoría y Línea (Fecha: {fecha_actual_str})", resumen_bajas, is_crosstab=True)
+    pdf.draw_table("Resumen de Altas por Categoría y Línea", resumen_altas, is_crosstab=True)
+    pdf.draw_table("Composición de la Dotación Activa", resumen_activos, is_crosstab=True)
+
+    # --- PÁGINA 2: DETALLES ---
     pdf.add_page()
     pdf.set_font("Arial", "B", 14)
     pdf.set_text_color(0, 51, 102)
@@ -98,10 +96,9 @@ def crear_pdf_completo(df_altas, df_bajas, bajas_por_motivo, resumen_altas, resu
     pdf.cell(0, 8, f"- Cantidad de Bajas: {len(df_bajas)}", ln=True)
     pdf.ln(5)
 
-    pdf.draw_table("Detalle de Altas", df_altas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha', 'Línea', 'Categoría']])
-    # Usar el dataframe de bajas con las nuevas columnas
+    pdf.draw_table("Detalle de Altas", df_altas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha nac.', 'Fecha', 'Línea', 'Categoría']])
     pdf.draw_table("Detalle de Bajas", df_bajas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Fecha nac.', 'Antigüedad', 'Desde', 'Línea', 'Categoría']])
-    pdf.draw_table("Bajas por Motivo", bajas_por_motivo.reset_index())
+    pdf.draw_table("Bajas por Motivo", bajas_por_motivo)
 
     return bytes(pdf.output())
 
@@ -130,9 +127,10 @@ if uploaded_file:
         df_base = df_base_raw.copy()
         df_base.rename(columns={'Gr.prof.': 'Categoría', 'División de personal': 'Línea'}, inplace=True)
 
+        # Convertir columnas de fecha a formato datetime
         for col in ['Fecha', 'Desde', 'Fecha nac.']:
             if col in df_base.columns:
-                df_base[col] = pd.to_datetime(df_base[col], errors='coerce').dt.date
+                df_base[col] = pd.to_datetime(df_base[col], errors='coerce')
         
         orden_lineas = ['ROCA', 'MITRE', 'SARMIENTO', 'SAN MARTIN', 'BELGRANO SUR', 'REGIONALES', 'CENTRAL']
         orden_categorias = ['COOR.E.T', 'INST.TEC', 'INS.CERT', 'CON.ELEC', 'CON.DIES', 'AY.CON.H', 'AY.CONDU', 'ASP.AY.C']
@@ -141,21 +139,28 @@ if uploaded_file:
         df_base['Categoría'] = pd.Categorical(df_base['Categoría'], categories=orden_categorias, ordered=True)
 
         activos_legajos = set(df_activos_raw['Nº pers.'])
-        df_bajas = df_base[df_base['Nº pers.'].isin(activos_legajos) & (df_base['Status ocupación'] == 'Dado de baja')].copy()
-        df_altas = df_base[~df_base['Nº pers.'].isin(activos_legajos) & (df_base['Status ocupación'] == 'Activo')].copy()
+        df_bajas_raw = df_base[df_base['Nº pers.'].isin(activos_legajos) & (df_base['Status ocupación'] == 'Dado de baja')].copy()
+        df_altas_raw = df_base[~df_base['Nº pers.'].isin(activos_legajos) & (df_base['Status ocupación'] == 'Activo')].copy()
         
-        # --- CÁLCULO DE ANTIGÜEDAD ---
+        # --- CÁLCULOS Y FORMATEO PARA LAS TABLAS DE DETALLE ---
+        df_bajas = df_bajas_raw.copy()
         if not df_bajas.empty:
-            fecha_bajas = pd.to_datetime(df_bajas['Fecha'], errors='coerce')
-            df_bajas['Antigüedad'] = ((datetime.now() - fecha_bajas) / pd.Timedelta(days=365.25)).fillna(0).astype(int)
+            df_bajas['Antigüedad'] = ((datetime.now() - df_bajas['Fecha']) / pd.Timedelta(days=365.25)).fillna(0).astype(int)
+            df_bajas['Fecha nac.'] = df_bajas['Fecha nac.'].dt.strftime('%d/%m/%Y')
+            df_bajas['Desde'] = df_bajas['Desde'].dt.strftime('%d/%m/%Y')
 
-        # --- PREPARAR DATOS PARA DASHBOARD ---
+        df_altas = df_altas_raw.copy()
+        if not df_altas.empty:
+            df_altas['Fecha'] = df_altas['Fecha'].dt.strftime('%d/%m/%Y')
+            df_altas['Fecha nac.'] = df_altas['Fecha nac.'].dt.strftime('%d/%m/%Y')
+
+        # --- PREPARAR DATOS PARA DASHBOARD (USAR DATOS CRUDOS PARA CÁLCULOS) ---
         df_activos_actuales = df_base[df_base['Status ocupación'] == 'Activo']
         resumen_activos = pd.crosstab(df_activos_actuales['Categoría'], df_activos_actuales['Línea'], margins=True, margins_name="Total")
-        resumen_bajas = pd.crosstab(df_bajas['Categoría'], df_bajas['Línea'], margins=True, margins_name="Total")
-        resumen_altas = pd.crosstab(df_altas['Categoría'], df_altas['Línea'], margins=True, margins_name="Total")
+        resumen_bajas = pd.crosstab(df_bajas_raw['Categoría'], df_bajas_raw['Línea'], margins=True, margins_name="Total")
+        resumen_altas = pd.crosstab(df_altas_raw['Categoría'], df_altas_raw['Línea'], margins=True, margins_name="Total")
         
-        bajas_por_motivo_series = df_bajas['Motivo de la medida'].value_counts()
+        bajas_por_motivo_series = df_bajas_raw['Motivo de la medida'].value_counts()
         bajas_por_motivo = bajas_por_motivo_series.to_frame('Cantidad')
         if not bajas_por_motivo.empty:
             bajas_por_motivo.loc['Total'] = bajas_por_motivo_series.sum()
@@ -163,7 +168,7 @@ if uploaded_file:
 
         st.success("¡Archivo cargado y procesado!")
         
-        pdf_bytes = crear_pdf_completo(df_altas, df_bajas, bajas_por_motivo, resumen_altas, resumen_bajas, resumen_activos)
+        pdf_bytes = crear_pdf_completo(df_altas, df_bajas, bajas_por_motivo.reset_index(), resumen_altas, resumen_bajas, resumen_activos)
         st.download_button(
             label="📄 Descargar Resumen en PDF",
             data=pdf_bytes,
@@ -180,9 +185,8 @@ if uploaded_file:
         with tab1:
             st.header("Detalle de Novedades")
             st.subheader(f"Altas ({len(df_altas)})")
-            st.dataframe(df_altas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha', 'Línea', 'Categoría']], hide_index=True)
+            st.dataframe(df_altas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha nac.', 'Fecha', 'Línea', 'Categoría']], hide_index=True)
             st.subheader(f"Bajas ({len(df_bajas)})")
-            # Mostrar la tabla de bajas con las nuevas columnas
             st.dataframe(df_bajas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Fecha nac.', 'Antigüedad', 'Desde', 'Línea', 'Categoría']], hide_index=True)
 
         with tab2:
