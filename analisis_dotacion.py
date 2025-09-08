@@ -206,3 +206,4 @@ if uploaded_file:
     except Exception as e:
         st.error(f"Ocurrió un error: {e}")
         st.warning("Verifica que tu archivo Excel contenga las pestañas 'Activos' y 'BaseQuery'.")
+
