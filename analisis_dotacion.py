@@ -18,7 +18,8 @@ class PDF(FPDF):
     def footer(self):
         self.set_y(-15)
         self.set_font("Arial", "I", 8)
-        self.cell(0, 10, f"Página {self.page_no()}", 0, 0, "C")
+        # Numeración sin la palabra "Página"
+        self.cell(0, 10, str(self.page_no()), 0, 0, "C")
 
     def draw_table(self, title, df_original, is_crosstab=False):
         if df_original.empty:
@@ -42,9 +43,8 @@ class PDF(FPDF):
 
         df_formatted = df.copy()
         for col in df_formatted.columns:
-             if pd.api.types.is_numeric_dtype(df_formatted[col]):
-                  df_formatted[col] = df_formatted[col].apply(lambda x: f"{x:,.0f}".replace(',', '.') if isinstance(x, (int, float)) and x != 0 else x)
-
+             if pd.api.types.is_numeric_dtype(df_formatted[col]) and col != 'Nº pers.':
+                  df_formatted[col] = df_formatted[col].apply(lambda x: f"{x:,.0f}".replace(',', '.') if isinstance(x, (int, float)) else x)
 
         widths = {col: max(self.get_string_width(str(col)) + 8, df_formatted[col].astype(str).apply(lambda x: self.get_string_width(x)).max() + 8) for col in df_formatted.columns}
         total_width = sum(widths.values())
@@ -78,11 +78,20 @@ class PDF(FPDF):
 
 def crear_pdf_completo(df_altas, df_bajas, bajas_por_motivo, resumen_altas, resumen_bajas, resumen_activos):
     pdf = PDF(orientation='L', unit='mm', format='A4')
-    pdf.add_page()
     
+    # --- PÁGINA 1 (ANTES PÁGINA 2): RESÚMENES ---
+    pdf.add_page()
+    fecha_actual_str = datetime.now().strftime('%d/%m/%Y')
+    
+    pdf.draw_table(f"Resumen de Bajas por Categoría y Línea (Fecha: {fecha_actual_str})", resumen_bajas.reset_index(), is_crosstab=True)
+    pdf.draw_table("Resumen de Altas por Categoría y Línea", resumen_altas.reset_index(), is_crosstab=True)
+    pdf.draw_table("Composición de la Dotación Activa", resumen_activos.reset_index(), is_crosstab=True)
+
+    # --- PÁGINA 2 (ANTES PÁGINA 1): DETALLES ---
+    pdf.add_page()
     pdf.set_font("Arial", "B", 14)
     pdf.set_text_color(0, 51, 102)
-    pdf.cell(0, 10, f"Período Analizado (Fecha: {datetime.now().strftime('%d/%m/%Y')})", ln=True)
+    pdf.cell(0, 10, f"Período Analizado (Fecha: {fecha_actual_str})", ln=True)
     pdf.set_font("Arial", "", 12)
     pdf.set_text_color(0, 0, 0)
     pdf.cell(0, 8, f"- Cantidad de Altas: {len(df_altas)}", ln=True)
@@ -90,12 +99,9 @@ def crear_pdf_completo(df_altas, df_bajas, bajas_por_motivo, resumen_altas, resu
     pdf.ln(5)
 
     pdf.draw_table("Detalle de Altas", df_altas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha', 'Línea', 'Categoría']])
-    pdf.draw_table("Detalle de Bajas", df_bajas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Desde', 'Línea', 'Categoría']])
-    pdf.draw_table("Bajas por Motivo", bajas_por_motivo, is_crosstab=True)
-    
-    pdf.draw_table("Resumen de Altas por Categoría y Línea", resumen_altas, is_crosstab=True)
-    pdf.draw_table("Resumen de Bajas por Categoría y Línea", resumen_bajas, is_crosstab=True)
-    pdf.draw_table("Composición de la Dotación Activa", resumen_activos, is_crosstab=True)
+    # Usar el dataframe de bajas con las nuevas columnas
+    pdf.draw_table("Detalle de Bajas", df_bajas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Fecha nac.', 'Antigüedad', 'Desde', 'Línea', 'Categoría']])
+    pdf.draw_table("Bajas por Motivo", bajas_por_motivo.reset_index())
 
     return bytes(pdf.output())
 
@@ -137,6 +143,11 @@ if uploaded_file:
         activos_legajos = set(df_activos_raw['Nº pers.'])
         df_bajas = df_base[df_base['Nº pers.'].isin(activos_legajos) & (df_base['Status ocupación'] == 'Dado de baja')].copy()
         df_altas = df_base[~df_base['Nº pers.'].isin(activos_legajos) & (df_base['Status ocupación'] == 'Activo')].copy()
+        
+        # --- CÁLCULO DE ANTIGÜEDAD ---
+        if not df_bajas.empty:
+            fecha_bajas = pd.to_datetime(df_bajas['Fecha'], errors='coerce')
+            df_bajas['Antigüedad'] = ((datetime.now() - fecha_bajas) / pd.Timedelta(days=365.25)).fillna(0).astype(int)
 
         # --- PREPARAR DATOS PARA DASHBOARD ---
         df_activos_actuales = df_base[df_base['Status ocupación'] == 'Activo']
@@ -152,7 +163,7 @@ if uploaded_file:
 
         st.success("¡Archivo cargado y procesado!")
         
-        pdf_bytes = crear_pdf_completo(df_altas, df_bajas, bajas_por_motivo.reset_index(), resumen_altas, resumen_bajas, resumen_activos)
+        pdf_bytes = crear_pdf_completo(df_altas, df_bajas, bajas_por_motivo, resumen_altas, resumen_bajas, resumen_activos)
         st.download_button(
             label="📄 Descargar Resumen en PDF",
             data=pdf_bytes,
@@ -164,7 +175,6 @@ if uploaded_file:
         # --- PESTAÑAS DE NAVEGACIÓN ---
         tab1, tab2, tab3 = st.tabs(["▶️ Novedades (Detalle)", "📈 Dashboard de Resúmenes", "🔄 Actualizar Activos"])
         
-        # --- Formateador para las tablas de Streamlit ---
         formatter = lambda x: f'{x:,.0f}'.replace(',', '.') if isinstance(x, (int, float)) else x
 
         with tab1:
@@ -172,7 +182,8 @@ if uploaded_file:
             st.subheader(f"Altas ({len(df_altas)})")
             st.dataframe(df_altas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha', 'Línea', 'Categoría']], hide_index=True)
             st.subheader(f"Bajas ({len(df_bajas)})")
-            st.dataframe(df_bajas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Desde', 'Línea', 'Categoría']], hide_index=True)
+            # Mostrar la tabla de bajas con las nuevas columnas
+            st.dataframe(df_bajas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Fecha nac.', 'Antigüedad', 'Desde', 'Línea', 'Categoría']], hide_index=True)
 
         with tab2:
             st.header("Dashboard de Resúmenes")
@@ -205,5 +216,4 @@ if uploaded_file:
             
     except Exception as e:
         st.error(f"Ocurrió un error: {e}")
-        st.warning("Verifica que tu archivo Excel contenga las pestañas 'Activos' y 'BaseQuery'.")
-
+        st.warning("Verifica que tu archivo Excel contenga las pestañas 'Activos' y 'BaseQuery' con las columnas necesarias.")
