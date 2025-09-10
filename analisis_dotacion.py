@@ -4,7 +4,7 @@ from fpdf import FPDF
 from datetime import datetime
 import io
 
-# --- CLASE MEJORADA PARA CREAR EL PDF EJECUTIVO ---
+# --- CLASE MEjorada PARA CREAR EL PDF EJECUTIVO ---
 class PDF(FPDF):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -81,9 +81,15 @@ def crear_pdf_completo(df_altas, df_bajas, bajas_por_motivo, resumen_altas, resu
 
     # --- PÁGINA 1: RESÚMENES ---
     pdf.add_page()
-    pdf.draw_table(f"Resumen de Bajas por Categoría y Línea (Fecha: {fecha_actual_str})", resumen_bajas, is_crosstab=True)
-    pdf.draw_table("Resumen de Altas por Categoría y Línea", resumen_altas, is_crosstab=True)
-    pdf.draw_table("Composición de la Dotación Activa", resumen_activos, is_crosstab=True)
+    
+    # Mostrar tablas de resumen solo si hay datos (más de 1 fila para excluir la fila "Total")
+    if len(resumen_bajas) > 1:
+        pdf.draw_table("Resumen de Bajas por Categoría y Línea", resumen_bajas, is_crosstab=True)
+    if len(resumen_altas) > 1:
+        pdf.draw_table("Resumen de Altas por Categoría y Línea", resumen_altas, is_crosstab=True)
+    
+    # Tabla principal siempre se muestra, con la fecha en el título
+    pdf.draw_table(f"Composición de la Dotación Activa (Fecha: {fecha_actual_str})", resumen_activos, is_crosstab=True)
 
     # --- PÁGINA 2: DETALLES ---
     pdf.add_page()
@@ -96,8 +102,8 @@ def crear_pdf_completo(df_altas, df_bajas, bajas_por_motivo, resumen_altas, resu
     pdf.cell(0, 8, f"- Cantidad de Bajas: {len(df_bajas)}", ln=True)
     pdf.ln(5)
 
-    pdf.draw_table("Detalle de Altas", df_altas)
-    pdf.draw_table("Detalle de Bajas", df_bajas)
+    pdf.draw_table("Detalle de Altas", df_altas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha nac.', 'Fecha', 'Línea', 'Categoría']])
+    pdf.draw_table("Detalle de Bajas", df_bajas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Fecha nac.', 'Antigüedad', 'Desde', 'Línea', 'Categoría']])
     pdf.draw_table("Bajas por Motivo", bajas_por_motivo)
 
     return bytes(pdf.output())
@@ -141,14 +147,12 @@ if uploaded_file:
         df_bajas_raw = df_base[df_base['Nº pers.'].isin(activos_legajos) & (df_base['Status ocupación'] == 'Dado de baja')].copy()
         df_altas_raw = df_base[~df_base['Nº pers.'].isin(activos_legajos) & (df_base['Status ocupación'] == 'Activo')].copy()
         
-        # --- CÁLCULOS Y FORMATEO PARA LAS TABLAS DE DETALLE ---
         df_bajas = df_bajas_raw.copy()
         if not df_bajas.empty:
             df_bajas['Antigüedad'] = ((datetime.now() - df_bajas['Fecha']) / pd.Timedelta(days=365.25)).fillna(0).astype(int)
             df_bajas['Fecha nac.'] = df_bajas['Fecha nac.'].dt.strftime('%d/%m/%Y')
             df_bajas['Desde'] = df_bajas['Desde'].dt.strftime('%d/%m/%Y')
         else:
-            # Si no hay bajas, crear un DataFrame vacío con las columnas correctas
             df_bajas = pd.DataFrame(columns=['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Fecha nac.', 'Antigüedad', 'Desde', 'Línea', 'Categoría'])
 
         df_altas = df_altas_raw.copy()
@@ -156,7 +160,6 @@ if uploaded_file:
             df_altas['Fecha'] = df_altas['Fecha'].dt.strftime('%d/%m/%Y')
             df_altas['Fecha nac.'] = df_altas['Fecha nac.'].dt.strftime('%d/%m/%Y')
         else:
-            # Si no hay altas, crear un DataFrame vacío con las columnas correctas
             df_altas = pd.DataFrame(columns=['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha nac.', 'Fecha', 'Línea', 'Categoría'])
 
         # --- PREPARAR DATOS PARA DASHBOARD ---
@@ -226,3 +229,4 @@ if uploaded_file:
     except Exception as e:
         st.error(f"Ocurrió un error: {e}")
         st.warning("Verifica que tu archivo Excel contenga las pestañas 'Activos' y 'BaseQuery' con las columnas necesarias.")
+
