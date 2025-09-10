@@ -96,8 +96,8 @@ def crear_pdf_completo(df_altas, df_bajas, bajas_por_motivo, resumen_altas, resu
     pdf.cell(0, 8, f"- Cantidad de Bajas: {len(df_bajas)}", ln=True)
     pdf.ln(5)
 
-    pdf.draw_table("Detalle de Altas", df_altas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha nac.', 'Fecha', 'Línea', 'Categoría']])
-    pdf.draw_table("Detalle de Bajas", df_bajas[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Fecha nac.', 'Antigüedad', 'Desde', 'Línea', 'Categoría']])
+    pdf.draw_table("Detalle de Altas", df_altas)
+    pdf.draw_table("Detalle de Bajas", df_bajas)
     pdf.draw_table("Bajas por Motivo", bajas_por_motivo)
 
     return bytes(pdf.output())
@@ -127,7 +127,6 @@ if uploaded_file:
         df_base = df_base_raw.copy()
         df_base.rename(columns={'Gr.prof.': 'Categoría', 'División de personal': 'Línea'}, inplace=True)
 
-        # Convertir columnas de fecha a formato datetime
         for col in ['Fecha', 'Desde', 'Fecha nac.']:
             if col in df_base.columns:
                 df_base[col] = pd.to_datetime(df_base[col], errors='coerce')
@@ -148,13 +147,19 @@ if uploaded_file:
             df_bajas['Antigüedad'] = ((datetime.now() - df_bajas['Fecha']) / pd.Timedelta(days=365.25)).fillna(0).astype(int)
             df_bajas['Fecha nac.'] = df_bajas['Fecha nac.'].dt.strftime('%d/%m/%Y')
             df_bajas['Desde'] = df_bajas['Desde'].dt.strftime('%d/%m/%Y')
+        else:
+            # Si no hay bajas, crear un DataFrame vacío con las columnas correctas
+            df_bajas = pd.DataFrame(columns=['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Fecha nac.', 'Antigüedad', 'Desde', 'Línea', 'Categoría'])
 
         df_altas = df_altas_raw.copy()
         if not df_altas.empty:
             df_altas['Fecha'] = df_altas['Fecha'].dt.strftime('%d/%m/%Y')
             df_altas['Fecha nac.'] = df_altas['Fecha nac.'].dt.strftime('%d/%m/%Y')
+        else:
+            # Si no hay altas, crear un DataFrame vacío con las columnas correctas
+            df_altas = pd.DataFrame(columns=['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha nac.', 'Fecha', 'Línea', 'Categoría'])
 
-        # --- PREPARAR DATOS PARA DASHBOARD (USAR DATOS CRUDOS PARA CÁLCULOS) ---
+        # --- PREPARAR DATOS PARA DASHBOARD ---
         df_activos_actuales = df_base[df_base['Status ocupación'] == 'Activo']
         resumen_activos = pd.crosstab(df_activos_actuales['Categoría'], df_activos_actuales['Línea'], margins=True, margins_name="Total")
         resumen_bajas = pd.crosstab(df_bajas_raw['Categoría'], df_bajas_raw['Línea'], margins=True, margins_name="Total")
