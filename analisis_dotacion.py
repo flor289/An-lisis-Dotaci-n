@@ -129,12 +129,9 @@ def formatear_y_procesar_novedades(df_altas_raw, df_bajas_raw):
 
 def filtrar_novedades_por_fecha(df_base, fecha_inicio, fecha_fin):
     df = df_base.copy()
-    # 1. Filtrar Altas: La fecha de alta debe estar en el rango
     altas_filtradas = df[(df['Fecha'] >= fecha_inicio) & (df['Fecha'] <= fecha_fin)].copy()
 
-    # 2. Filtrar Bajas con lógica especial
     df_bajas_potenciales = df[df['Status ocupación'] == 'Dado de baja'].copy()
-    # Corregir la fecha de baja (restar 1 día) ANTES de filtrar
     df_bajas_potenciales['fecha_baja_corregida'] = df_bajas_potenciales['Desde'] - pd.Timedelta(days=1)
     bajas_filtradas = df_bajas_potenciales[(df_bajas_potenciales['fecha_baja_corregida'] >= fecha_inicio) & (df_bajas_potenciales['fecha_baja_corregida'] <= fecha_fin)].copy()
     
@@ -168,10 +165,11 @@ if uploaded_file:
         
         # --- LÓGICA REPORTE GENERAL (POR COMPARACIÓN DE ARCHIVOS) ---
         activos_legajos = set(df_activos_raw['Nº pers.'])
-        condicion_baja = (df_base['Nº pers.'].isin(activos_legajos) | ~df_base['Nº pers.'].isin(activos_legajos)) & (df_base['Status ocupación'] == 'Dado de baja')
-        df_bajas_general_raw = df_base[condicion_baja].copy()
+        # LÓGICA ORIGINAL Y CORRECTA PARA EL REPORTE GENERAL
+        df_bajas_general_raw = df_base[df_base['Nº pers.'].isin(activos_legajos) & (df_base['Status ocupación'] == 'Dado de baja')].copy()
+        df_altas_general_raw = df_base[~df_base['Nº pers.'].isin(activos_legajos) & (df_base['Status ocupación'] == 'Activo')].copy()
+
         if not df_bajas_general_raw.empty: df_bajas_general_raw['Desde'] = df_bajas_general_raw['Desde'] - pd.Timedelta(days=1)
-        df_altas_general_raw = df_base[~df_base['Nº pers.'].isin(activos_legajos)].copy()
         
         df_altas_general, df_bajas_general = formatear_y_procesar_novedades(df_altas_general_raw, df_bajas_general_raw)
         
@@ -190,7 +188,7 @@ if uploaded_file:
         formatter = lambda x: f'{x:,.0f}'.replace(',', '.') if isinstance(x, (int, float)) else x
         
         with tab1:
-            st.header("Detalle de Todas las Novedades (por comparación de archivos)")
+            st.header("Detalle de Novedades (por comparación de archivos)")
             st.subheader(f"Altas ({len(df_altas_general)})")
             st.dataframe(df_altas_general[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha nac.', 'Fecha', 'Línea', 'Categoría']], hide_index=True)
             st.subheader(f"Bajas ({len(df_bajas_general)})")
@@ -223,7 +221,7 @@ if uploaded_file:
                 if not bajas_motivo_sem.empty: bajas_motivo_sem.loc['Total'] = bajas_motivo_sem.sum()
 
                 pdf_bytes_sem = crear_pdf_reporte("Resumen Semanal de Dotación", rango_str_sem, df_altas_sem, df_bajas_sem, bajas_motivo_sem.reset_index(), resumen_altas_sem, resumen_bajas_sem, resumen_activos_full)
-                st.download_button("📄 Descargar Reporte Semanal en PDF", pdf_bytes_sem, f"Reporte_Semanal_{start_date_sem.strftime('%Y%m%d')}.pdf", "application/pdf")
+                st.download_button("📄 Descargar Reporte Semanal en PDF", pdf_bytes_sem, f"Reporte_Semanal_{start_date_sem.strftime('%Y%m%d')}.pdf", "application/pdf", key="btn_sem")
 
         with tab4:
             st.header("Generador de Reportes Mensuales (por fecha de evento)")
@@ -235,7 +233,7 @@ if uploaded_file:
             with col1: start_date_men = st.date_input("Fecha de inicio", dflt_start, key="mensual_inicio")
             with col2: end_date_men = st.date_input("Fecha de fin", dflt_end, key="mensual_fin")
 
-            if start_date_men and end_date_men:
+            if start_date_men and end_date_men and start_date_men <= end_date_men:
                 rango_str_men = f"{start_date_men.strftime('%d/%m/%Y')} - {end_date_men.strftime('%d/%m/%Y')}"
                 st.write(f"**Período a analizar:** {rango_str_men}")
 
@@ -248,8 +246,11 @@ if uploaded_file:
                 if not bajas_motivo_men.empty: bajas_motivo_men.loc['Total'] = bajas_motivo_men.sum()
 
                 pdf_bytes_men = crear_pdf_reporte("Resumen Mensual de Dotación", rango_str_men, df_altas_men, df_bajas_men, bajas_motivo_men.reset_index(), resumen_altas_men, resumen_bajas_men, resumen_activos_full)
-                st.download_button("📄 Descargar Reporte Mensual en PDF", pdf_bytes_men, f"Reporte_Mensual_{start_date_men.strftime('%Y%m')}.pdf", "application/pdf")
+                st.download_button("📄 Descargar Reporte Mensual en PDF", pdf_bytes_men, f"Reporte_Mensual_{start_date_men.strftime('%Y%m')}.pdf", "application/pdf", key="btn_men")
+            elif start_date_men > end_date_men:
+                st.error("La fecha de inicio no puede ser posterior a la fecha de fin.")
                 
     except Exception as e:
         st.error(f"Ocurrió un error: {e}")
         st.warning("Verifica que tu archivo Excel contenga las pestañas 'Activos' y 'BaseQuery' con las columnas necesarias.")
+
