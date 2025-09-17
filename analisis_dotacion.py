@@ -110,6 +110,19 @@ def crear_pdf_reporte(titulo_reporte, rango_fechas_str, df_altas, df_bajas, baja
 
     return bytes(pdf.output())
 
+def procesar_archivo_base(archivo_cargado, sheet_name='BaseQuery'):
+    """Función para leer y procesar un archivo base con un nombre de pestaña específico."""
+    df_base = pd.read_excel(archivo_cargado, sheet_name=sheet_name, engine='openpyxl')
+    df_base.rename(columns={'Gr.prof.': 'Categoría', 'División de personal': 'Línea'}, inplace=True)
+    for col in ['Fecha', 'Desde', 'Fecha nac.']:
+        if col in df_base.columns: df_base[col] = pd.to_datetime(df_base[col], errors='coerce')
+    
+    orden_lineas = ['ROCA', 'MITRE', 'SARMIENTO', 'SAN MARTIN', 'BELGRANO SUR', 'REGIONALES', 'CENTRAL']
+    orden_categorias = ['COOR.E.T', 'INST.TEC', 'INS.CERT', 'CON.ELEC', 'CON.DIES', 'AY.CON.H', 'AY.CONDU', 'ASP.AY.C']
+    df_base['Línea'] = pd.Categorical(df_base['Línea'], categories=orden_lineas, ordered=True)
+    df_base['Categoría'] = pd.Categorical(df_base['Categoría'], categories=orden_categorias, ordered=True)
+    return df_base
+
 def formatear_y_procesar_novedades(df_altas_raw, df_bajas_raw):
     df_bajas = df_bajas_raw.copy()
     if not df_bajas.empty:
@@ -127,13 +140,16 @@ def formatear_y_procesar_novedades(df_altas_raw, df_bajas_raw):
         df_altas = pd.DataFrame(columns=['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha nac.', 'Fecha', 'Línea', 'Categoría'])
     return df_altas, df_bajas
 
-def filtrar_novedades_por_fecha(df_base, fecha_inicio, fecha_fin):
-    df = df_base.copy()
+def filtrar_novedades_por_fecha(df_base_para_filtrar, fecha_inicio, fecha_fin):
+    df = df_base_para_filtrar.copy()
     altas_filtradas = df[(df['Fecha'] >= fecha_inicio) & (df['Fecha'] <= fecha_fin)].copy()
 
     df_bajas_potenciales = df[df['Status ocupación'] == 'Dado de baja'].copy()
-    df_bajas_potenciales['fecha_baja_corregida'] = df_bajas_potenciales['Desde'] - pd.Timedelta(days=1)
-    bajas_filtradas = df_bajas_potenciales[(df_bajas_potenciales['fecha_baja_corregida'] >= fecha_inicio) & (df_bajas_potenciales['fecha_baja_corregida'] <= fecha_fin)].copy()
+    if not df_bajas_potenciales.empty:
+        df_bajas_potenciales['fecha_baja_corregida'] = df_bajas_potenciales['Desde'] - pd.Timedelta(days=1)
+        bajas_filtradas = df_bajas_potenciales[(df_bajas_potenciales['fecha_baja_corregida'] >= fecha_inicio) & (df_bajas_potenciales['fecha_baja_corregida'] <= fecha_fin)].copy()
+    else:
+        bajas_filtradas = pd.DataFrame()
     
     return altas_filtradas, bajas_filtradas
 
@@ -141,36 +157,24 @@ def filtrar_novedades_por_fecha(df_base, fecha_inicio, fecha_fin):
 st.set_page_config(page_title="Dashboard de Dotación", layout="wide")
 st.markdown("""<style>.main .block-container { padding-top: 2rem; padding-bottom: 2rem; background-color: #f0f2f6; } h1, h2, h3 { color: #003366; } div.stDownloadButton > button { background-color: #28a745; color: white; border-radius: 5px; font-weight: bold; }</style>""", unsafe_allow_html=True)
 st.title("📊 Dashboard de Control de Dotación")
-st.write("Sube tu archivo Excel para analizar las novedades y ver resúmenes.")
+st.write("Sube tus archivos para el reporte general o usa las pestañas para reportes por período.")
 
-uploaded_file = st.file_uploader("Selecciona tu archivo Excel", type=['xlsx'], key="uploader")
+col1, col2 = st.columns(2)
+with col1: uploaded_file = st.file_uploader("1. Sube tu archivo BaseQuery", type=['xlsx'], key="main_base")
+with col2: uploaded_file_activos = st.file_uploader("2. Sube tu archivo de Activos anterior", type=['xlsx'], key="main_activos")
 
-if uploaded_file:
+if uploaded_file and uploaded_file_activos:
     try:
-        df_base_raw = pd.read_excel(uploaded_file, sheet_name='BaseQuery', engine='openpyxl')
-        df_activos_raw = pd.read_excel(uploaded_file, sheet_name='Activos', engine='openpyxl')
+        df_base = procesar_archivo_base(uploaded_file, sheet_name='BaseQuery')
+        df_activos_raw = pd.read_excel(uploaded_file_activos, sheet_name='Activos', engine='openpyxl')
         
-        df_base = df_base_raw.copy()
-        df_base.rename(columns={'Gr.prof.': 'Categoría', 'División de personal': 'Línea'}, inplace=True)
-
-        for col in ['Fecha', 'Desde', 'Fecha nac.']:
-            if col in df_base.columns: df_base[col] = pd.to_datetime(df_base[col], errors='coerce')
+        st.success("¡Archivos generales cargados y procesados!")
         
-        orden_lineas = ['ROCA', 'MITRE', 'SARMIENTO', 'SAN MARTIN', 'BELGRANO SUR', 'REGIONALES', 'CENTRAL']
-        orden_categorias = ['COOR.E.T', 'INST.TEC', 'INS.CERT', 'CON.ELEC', 'CON.DIES', 'AY.CON.H', 'AY.CONDU', 'ASP.AY.C']
-        df_base['Línea'] = pd.Categorical(df_base['Línea'], categories=orden_lineas, ordered=True)
-        df_base['Categoría'] = pd.Categorical(df_base['Categoría'], categories=orden_categorias, ordered=True)
-
-        st.success("¡Archivo cargado y procesado!")
-        
-        # --- LÓGICA REPORTE GENERAL (POR COMPARACIÓN DE ARCHIVOS) ---
         activos_legajos = set(df_activos_raw['Nº pers.'])
-        # LÓGICA ORIGINAL Y CORRECTA PARA EL REPORTE GENERAL
         df_bajas_general_raw = df_base[df_base['Nº pers.'].isin(activos_legajos) & (df_base['Status ocupación'] == 'Dado de baja')].copy()
         df_altas_general_raw = df_base[~df_base['Nº pers.'].isin(activos_legajos) & (df_base['Status ocupación'] == 'Activo')].copy()
 
         if not df_bajas_general_raw.empty: df_bajas_general_raw['Desde'] = df_bajas_general_raw['Desde'] - pd.Timedelta(days=1)
-        
         df_altas_general, df_bajas_general = formatear_y_procesar_novedades(df_altas_general_raw, df_bajas_general_raw)
         
         resumen_activos_full = pd.crosstab(df_base[df_base['Status ocupación'] == 'Activo']['Categoría'], df_base[df_base['Status ocupación'] == 'Activo']['Línea'], margins=True, margins_name="Total")
@@ -183,20 +187,16 @@ if uploaded_file:
         st.download_button(label="📄 Descargar Reporte General (PDF)", data=pdf_bytes_general, file_name=f"Reporte_General_Dotacion_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf")
         st.markdown("---")
 
-        # --- PESTAÑAS ---
         tab1, tab2, tab3, tab4 = st.tabs(["▶️ Novedades (General)", "📈 Resúmenes (General)", "📅 Reporte Semanal", "📅 Reporte Mensual"])
         formatter = lambda x: f'{x:,.0f}'.replace(',', '.') if isinstance(x, (int, float)) else x
         
         with tab1:
             st.header("Detalle de Novedades (por comparación de archivos)")
-            st.subheader(f"Altas ({len(df_altas_general)})")
-            st.dataframe(df_altas_general[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha nac.', 'Fecha', 'Línea', 'Categoría']], hide_index=True)
-            st.subheader(f"Bajas ({len(df_bajas_general)})")
-            st.dataframe(df_bajas_general[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Fecha nac.', 'Antigüedad', 'Desde', 'Línea', 'Categoría']], hide_index=True)
+            st.subheader(f"Altas ({len(df_altas_general)})"); st.dataframe(df_altas_general[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha nac.', 'Fecha', 'Línea', 'Categoría']], hide_index=True)
+            st.subheader(f"Bajas ({len(df_bajas_general)})"); st.dataframe(df_bajas_general[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Fecha nac.', 'Antigüedad', 'Desde', 'Línea', 'Categoría']], hide_index=True)
 
         with tab2:
-            st.header("Dashboard de Resúmenes (Completo)")
-            st.subheader("Composición de la Dotación Activa")
+            st.header("Dashboard de Resúmenes (Completo)"); st.subheader("Composición de la Dotación Activa")
             st.dataframe(resumen_activos_full.replace(0, '-').style.format(formatter))
             st.subheader("Resumen de Novedades")
             col1, col2 = st.columns(2)
@@ -206,13 +206,17 @@ if uploaded_file:
 
         with tab3:
             st.header("Generador de Reportes Semanales (por fecha de evento)")
+            uploader_sem = st.file_uploader("Opcional: Sube un archivo (con pestaña 'Sheet1')", type=['xlsx'], key="upload_sem")
+            
+            df_base_sem = procesar_archivo_base(uploader_sem, sheet_name='Sheet1') if uploader_sem else df_base
+            
             start_date_sem = st.date_input("Fecha de inicio del reporte", datetime.now() - timedelta(days=7), key="semanal")
             if start_date_sem:
                 end_date_sem = datetime.now()
                 rango_str_sem = f"{start_date_sem.strftime('%d/%m/%Y')} - {end_date_sem.strftime('%d/%m/%Y')}"
                 st.write(f"**Período a analizar:** {rango_str_sem}")
 
-                df_altas_sem_raw, df_bajas_sem_raw = filtrar_novedades_por_fecha(df_base, pd.to_datetime(start_date_sem), end_date_sem)
+                df_altas_sem_raw, df_bajas_sem_raw = filtrar_novedades_por_fecha(df_base_sem, pd.to_datetime(start_date_sem), end_date_sem)
                 df_altas_sem, df_bajas_sem = formatear_y_procesar_novedades(df_altas_sem_raw, df_bajas_sem_raw)
                 
                 resumen_bajas_sem = pd.crosstab(df_bajas_sem_raw['Categoría'], df_bajas_sem_raw['Línea'], margins=True, margins_name="Total")
@@ -225,9 +229,12 @@ if uploaded_file:
 
         with tab4:
             st.header("Generador de Reportes Mensuales (por fecha de evento)")
+            uploader_men = st.file_uploader("Opcional: Sube un archivo (con pestaña 'Sheet1')", type=['xlsx'], key="upload_men")
+            
+            df_base_men = procesar_archivo_base(uploader_men, sheet_name='Sheet1') if uploader_men else df_base
+
             today = datetime.now()
-            dflt_start = today.replace(day=1)
-            dflt_end = (dflt_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+            dflt_start = today.replace(day=1); dflt_end = (dflt_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
             
             col1, col2 = st.columns(2)
             with col1: start_date_men = st.date_input("Fecha de inicio", dflt_start, key="mensual_inicio")
@@ -237,7 +244,7 @@ if uploaded_file:
                 rango_str_men = f"{start_date_men.strftime('%d/%m/%Y')} - {end_date_men.strftime('%d/%m/%Y')}"
                 st.write(f"**Período a analizar:** {rango_str_men}")
 
-                df_altas_men_raw, df_bajas_men_raw = filtrar_novedades_por_fecha(df_base, pd.to_datetime(start_date_men), pd.to_datetime(end_date_men))
+                df_altas_men_raw, df_bajas_men_raw = filtrar_novedades_por_fecha(df_base_men, pd.to_datetime(start_date_men), pd.to_datetime(end_date_men))
                 df_altas_men, df_bajas_men = formatear_y_procesar_novedades(df_altas_men_raw, df_bajas_men_raw)
                 
                 resumen_bajas_men = pd.crosstab(df_bajas_men_raw['Categoría'], df_bajas_men_raw['Línea'], margins=True, margins_name="Total")
@@ -252,5 +259,4 @@ if uploaded_file:
                 
     except Exception as e:
         st.error(f"Ocurrió un error: {e}")
-        st.warning("Verifica que tu archivo Excel contenga las pestañas 'Activos' y 'BaseQuery' con las columnas necesarias.")
-
+        st.warning("Verifica que tus archivos Excel tengan el formato y las pestañas correctas ('Activos', 'BaseQuery' o 'Sheet1').")
