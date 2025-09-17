@@ -10,7 +10,6 @@ class PDF(FPDF):
         super().__init__(*args, **kwargs)
         self.page_width = self.w - 2 * self.l_margin
         self.report_title = "Resumen de Dotación"
-        # Propiedades para guardar el encabezado de la tabla
         self.table_header_data = None 
 
     def header(self):
@@ -68,20 +67,18 @@ class PDF(FPDF):
             widths = {k: v * scaling_factor for k, v in widths.items()}
             font_size = 7
 
-        # Guardar datos del encabezado para poder redibujarlo
         self.table_header_data = {
             'widths': widths,
             'font_size': font_size,
             'df_columns': df_formatted.columns
         }
         
-        self._draw_table_header() # Dibujar el primer encabezado
+        self._draw_table_header()
         
         for _, row in df_formatted.iterrows():
-            # Revisar si la siguiente celda cabe en la página
             if self.get_y() + 8 > self.h - self.b_margin:
                 self.add_page(orientation=self.cur_orientation)
-                self._draw_table_header() # Redibujar encabezado en la nueva página
+                self._draw_table_header()
 
             is_total_row = "Total" in str(row.iloc[0])
             if is_total_row:
@@ -93,24 +90,20 @@ class PDF(FPDF):
                 self.cell(widths[col], 8, str(row[col]), 1, 0, "C")
             self.ln()
         
-        self.table_header_data = None # Limpiar datos del encabezado
+        self.table_header_data = None
         self.ln(10)
-        
-# ... (El resto del código es idéntico al anterior)
 
 def crear_pdf_reporte(titulo_reporte, rango_fechas_str, df_altas, df_bajas, bajas_por_motivo, resumen_altas, resumen_bajas, resumen_activos):
     pdf = PDF(orientation='L', unit='mm', format='A4')
-    pdf.report_title = titulo_reporte # Establecer título dinámico
+    pdf.report_title = titulo_reporte
 
-    # --- PÁGINA 1: RESÚMENES ---
     pdf.add_page()
     
+    fecha_final = rango_fechas_str.split(' - ')[-1] # Obtiene la última fecha del rango o la única
     pdf.draw_table(f"Resumen de Bajas (Período: {rango_fechas_str})", resumen_bajas, is_crosstab=True)
     pdf.draw_table(f"Resumen de Altas (Período: {rango_fechas_str})", resumen_altas, is_crosstab=True)
-    
-    pdf.draw_table(f"Composición de la Dotación Activa (Al {rango_fechas_str.split(' - ')[1]})", resumen_activos, is_crosstab=True)
+    pdf.draw_table(f"Composición de la Dotación Activa (Al {fecha_final})", resumen_activos, is_crosstab=True)
 
-    # --- PÁGINA 2: DETALLES ---
     pdf.add_page()
     pdf.set_font("Arial", "B", 14)
     pdf.set_text_color(0, 51, 102)
@@ -174,10 +167,8 @@ if uploaded_file:
         df_altas_raw = df_base[~df_base['Nº pers.'].isin(activos_legajos) & (df_base['Status ocupación'] == 'Activo')].copy()
         
         st.success("¡Archivo cargado y procesado!")
-        st.markdown("---")
-
-        tab1, tab2, tab3 = st.tabs(["▶️ Novedades (General)", "📈 Resúmenes (General)", "📅 Reporte Semanal"])
         
+        # --- PREPARACIÓN DE DATOS COMPLETOS PARA MOSTRAR ---
         df_bajas_full = df_bajas_raw.copy()
         if not df_bajas_full.empty:
             df_bajas_full['Antigüedad'] = ((datetime.now() - df_bajas_full['Fecha']) / pd.Timedelta(days=365.25)).fillna(0).astype(int)
@@ -193,6 +184,36 @@ if uploaded_file:
         else:
             df_altas_full = pd.DataFrame(columns=['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha nac.', 'Fecha', 'Línea', 'Categoría'])
         
+        # --- BOTÓN PARA REPORTE GENERAL (DEL DÍA) ---
+        resumen_activos_full = pd.crosstab(df_base[df_base['Status ocupación'] == 'Activo']['Categoría'], df_base[df_base['Status ocupación'] == 'Activo']['Línea'], margins=True, margins_name="Total")
+        resumen_bajas_full = pd.crosstab(df_bajas_raw['Categoría'], df_bajas_raw['Línea'], margins=True, margins_name="Total")
+        resumen_altas_full = pd.crosstab(df_altas_raw['Categoría'], df_altas_raw['Línea'], margins=True, margins_name="Total")
+        bajas_por_motivo_full = df_bajas_raw['Motivo de la medida'].value_counts().to_frame('Cantidad')
+        if not bajas_por_motivo_full.empty:
+            bajas_por_motivo_full.loc['Total'] = bajas_por_motivo_full.sum()
+        bajas_por_motivo_full.index.name = "Motivo"
+
+        pdf_bytes_general = crear_pdf_reporte(
+            titulo_reporte="Resumen de Dotación",
+            rango_fechas_str=datetime.now().strftime('%d/%m/%Y'),
+            df_altas=df_altas_full,
+            df_bajas=df_bajas_full,
+            bajas_por_motivo=bajas_por_motivo_full.reset_index(),
+            resumen_altas=resumen_altas_full,
+            resumen_bajas=resumen_bajas_full,
+            resumen_activos=resumen_activos_full
+        )
+        st.download_button(
+            label="📄 Descargar Reporte General (PDF)",
+            data=pdf_bytes_general,
+            file_name=f"Reporte_General_Dotacion_{datetime.now().strftime('%Y%m%d')}.pdf",
+            mime="application/pdf",
+        )
+        st.markdown("---")
+
+        # --- PESTAÑAS DE NAVEGACIÓN ---
+        tab1, tab2, tab3 = st.tabs(["▶️ Novedades (General)", "📈 Resúmenes (General)", "📅 Reporte Semanal"])
+        
         formatter = lambda x: f'{x:,.0f}'.replace(',', '.') if isinstance(x, (int, float)) else x
         
         with tab1:
@@ -204,26 +225,18 @@ if uploaded_file:
 
         with tab2:
             st.header("Dashboard de Resúmenes (Completo)")
-            resumen_activos = pd.crosstab(df_base[df_base['Status ocupación'] == 'Activo']['Categoría'], df_base[df_base['Status ocupación'] == 'Activo']['Línea'], margins=True, margins_name="Total")
-            resumen_bajas = pd.crosstab(df_bajas_raw['Categoría'], df_bajas_raw['Línea'], margins=True, margins_name="Total")
-            resumen_altas = pd.crosstab(df_altas_raw['Categoría'], df_altas_raw['Línea'], margins=True, margins_name="Total")
-            bajas_por_motivo = df_bajas_raw['Motivo de la medida'].value_counts().to_frame('Cantidad')
-            if not bajas_por_motivo.empty:
-                bajas_por_motivo.loc['Total'] = bajas_por_motivo.sum()
-            bajas_por_motivo.index.name = "Motivo"
-
             st.subheader("Composición de la Dotación Activa")
-            st.dataframe(resumen_activos.replace(0, '-').style.format(formatter))
+            st.dataframe(resumen_activos_full.replace(0, '-').style.format(formatter))
             st.subheader("Resumen de Novedades")
             col1, col2 = st.columns(2)
             with col1:
                 st.write("**Bajas por Categoría y Línea:**")
-                st.dataframe(resumen_bajas.replace(0, '-').style.format(formatter))
+                st.dataframe(resumen_bajas_full.replace(0, '-').style.format(formatter))
             with col2:
                 st.write("**Altas por Categoría y Línea:**")
-                st.dataframe(resumen_altas.replace(0, '-').style.format(formatter))
+                st.dataframe(resumen_altas_full.replace(0, '-').style.format(formatter))
             st.write("**Bajas por Motivo:**")
-            st.dataframe(bajas_por_motivo.style.format(formatter))
+            st.dataframe(bajas_por_motivo_full.style.format(formatter))
 
         with tab3:
             st.header("Generador de Reportes Semanales")
@@ -236,20 +249,20 @@ if uploaded_file:
                 rango_str = f"{start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}"
                 st.write(f"**Rango para los títulos del reporte:** {rango_str}")
 
-                pdf_bytes = crear_pdf_reporte(
+                pdf_bytes_semanal = crear_pdf_reporte(
                     titulo_reporte="Resumen Semanal de Dotación",
                     rango_fechas_str=rango_str,
                     df_altas=df_altas_full,
                     df_bajas=df_bajas_full,
-                    bajas_por_motivo=bajas_por_motivo.reset_index(),
-                    resumen_altas=resumen_altas,
-                    resumen_bajas=resumen_bajas,
-                    resumen_activos=resumen_activos
+                    bajas_por_motivo=bajas_por_motivo_full.reset_index(),
+                    resumen_altas=resumen_altas_full,
+                    resumen_bajas=resumen_bajas_full,
+                    resumen_activos=resumen_activos_full
                 )
                 
                 st.download_button(
                     label="📄 Descargar Reporte Semanal en PDF",
-                    data=pdf_bytes,
+                    data=pdf_bytes_semanal,
                     file_name=f"Reporte_Semanal_Dotacion_{start_date.strftime('%Y%m%d')}.pdf",
                     mime="application/pdf",
                 )
@@ -257,3 +270,4 @@ if uploaded_file:
     except Exception as e:
         st.error(f"Ocurrió un error: {e}")
         st.warning("Verifica que tu archivo Excel contenga las pestañas 'Activos' y 'BaseQuery' con las columnas necesarias.")
+
