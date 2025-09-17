@@ -134,6 +134,7 @@ def formatear_y_procesar_novedades(df_altas_raw, df_bajas_raw):
 def filtrar_novedades_por_fecha(df_base_para_filtrar, fecha_inicio, fecha_fin):
     df = df_base_para_filtrar.copy()
     altas_filtradas = df[(df['Fecha'] >= fecha_inicio) & (df['Fecha'] <= fecha_fin)].copy()
+
     df_bajas_potenciales = df[df['Status ocupación'] == 'Dado de baja'].copy()
     if not df_bajas_potenciales.empty:
         df_bajas_potenciales['fecha_baja_corregida'] = df_bajas_potenciales['Desde'] - pd.Timedelta(days=1)
@@ -141,6 +142,23 @@ def filtrar_novedades_por_fecha(df_base_para_filtrar, fecha_inicio, fecha_fin):
     else:
         bajas_filtradas = pd.DataFrame()
     return altas_filtradas, bajas_filtradas
+
+def calcular_activos_a_fecha(df_base, fecha_fin):
+    """Calcula la dotación activa a una fecha específica del pasado."""
+    df = df_base.copy()
+    # 1. Quitar los que ingresaron DESPUÉS de la fecha de fin
+    df = df[df['Fecha'] <= fecha_fin]
+    
+    # 2. De los que quedan, determinar quiénes estaban activos en esa fecha
+    # Condición: O siguen activos hoy, o su fecha de baja (corregida) es posterior a la fecha de fin
+    df_bajas = df[df['Status ocupación'] == 'Dado de baja'].copy()
+    df_bajas['fecha_baja_corregida'] = df_bajas['Desde'] - pd.Timedelta(days=1)
+    
+    activos_en_fecha = df[
+        (df['Status ocupación'] == 'Activo') | 
+        (df['Nº pers.'].isin(df_bajas[df_bajas['fecha_baja_corregida'] > fecha_fin]['Nº pers.']))
+    ]
+    return activos_en_fecha
 
 # --- INTERFAZ DE LA APP ---
 st.set_page_config(page_title="Dashboard de Dotación", layout="wide")
@@ -150,7 +168,6 @@ st.title("📊 Dashboard de Control de Dotación")
 # --- PESTAÑAS (SIEMPRE VISIBLES) ---
 tab1, tab2, tab3, tab4 = st.tabs(["▶️ Novedades (General)", "📈 Resúmenes (General)", "📅 Reporte Semanal", "📅 Reporte Mensual"])
 
-# --- LÓGICA PESTAÑA 1 (REPORTE GENERAL) ---
 with tab1:
     st.header("Análisis General por Comparación de Archivos")
     st.info("Sube tu archivo Excel con las pestañas 'BaseQuery' y 'Activos' para ver las novedades generales.")
@@ -158,17 +175,19 @@ with tab1:
 
     if uploaded_file_general:
         try:
-            df_base_general = procesar_archivo_base(uploaded_file_general, sheet_name='BaseQuery')
-            df_activos_general_raw = pd.read_excel(uploaded_file_general, sheet_name='Activos', engine='openpyxl')
+            st.session_state.df_base_general = procesar_archivo_base(uploaded_file_general, sheet_name='BaseQuery')
+            st.session_state.df_activos_general_raw = pd.read_excel(uploaded_file_general, sheet_name='Activos', engine='openpyxl')
             st.success("Archivo general cargado y procesado.")
 
-            activos_legajos = set(df_activos_general_raw['Nº pers.'])
-            df_bajas_general_raw = df_base_general[df_base_general['Nº pers.'].isin(activos_legajos) & (df_base_general['Status ocupación'] == 'Dado de baja')].copy()
-            df_altas_general_raw = df_base_general[~df_base_general['Nº pers.'].isin(activos_legajos) & (df_base_general['Status ocupación'] == 'Activo')].copy()
+            activos_legajos = set(st.session_state.df_activos_general_raw['Nº pers.'])
+            df_bajas_general_raw = st.session_state.df_base_general[st.session_state.df_base_general['Nº pers.'].isin(activos_legajos) & (st.session_state.df_base_general['Status ocupación'] == 'Dado de baja')].copy()
+            df_altas_general_raw = st.session_state.df_base_general[~st.session_state.df_base_general['Nº pers.'].isin(activos_legajos) & (st.session_state.df_base_general['Status ocupación'] == 'Activo')].copy()
             
             if not df_bajas_general_raw.empty: df_bajas_general_raw['Desde'] = df_bajas_general_raw['Desde'] - pd.Timedelta(days=1)
             
             df_altas_general, df_bajas_general = formatear_y_procesar_novedades(df_altas_general_raw, df_bajas_general_raw)
+            st.session_state.df_altas_general = df_altas_general
+            st.session_state.df_bajas_general = df_bajas_general
             
             st.subheader(f"Altas ({len(df_altas_general)})"); st.dataframe(df_altas_general[['Nº pers.', 'Apellido', 'Nombre de pila', 'Fecha nac.', 'Fecha', 'Línea', 'Categoría']], hide_index=True)
             st.subheader(f"Bajas ({len(df_bajas_general)})"); st.dataframe(df_bajas_general[['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Fecha nac.', 'Antigüedad', 'Desde', 'Línea', 'Categoría']], hide_index=True)
@@ -177,13 +196,12 @@ with tab1:
             st.error(f"Ocurrió un error en el archivo general: {e}")
             st.warning("Verifica que el archivo contenga las pestañas 'Activos' y 'BaseQuery'.")
 
-# --- LÓGICA PESTAÑA 2 (RESÚMENES GENERALES) ---
 with tab2:
     st.header("Dashboard de Resúmenes (General)")
-    if uploaded_file_general:
-        # Re-procesar para asegurar que los datos estén disponibles
-        df_base_general = procesar_archivo_base(uploaded_file_general, sheet_name='BaseQuery')
-        df_activos_general_raw = pd.read_excel(uploaded_file_general, sheet_name='Activos', engine='openpyxl')
+    if 'df_base_general' in st.session_state:
+        df_base_general = st.session_state.df_base_general
+        df_activos_general_raw = st.session_state.df_activos_general_raw
+        
         activos_legajos = set(df_activos_general_raw['Nº pers.'])
         df_bajas_general_raw = df_base_general[df_base_general['Nº pers.'].isin(activos_legajos) & (df_base_general['Status ocupación'] == 'Dado de baja')].copy()
         df_altas_general_raw = df_base_general[~df_base_general['Nº pers.'].isin(activos_legajos) & (df_base_general['Status ocupación'] == 'Activo')].copy()
@@ -194,30 +212,31 @@ with tab2:
         bajas_por_motivo_full = df_bajas_general_raw['Motivo de la medida'].value_counts().to_frame('Cantidad')
         if not bajas_por_motivo_full.empty: bajas_por_motivo_full.loc['Total'] = bajas_por_motivo_full.sum()
 
+        pdf_bytes_general = crear_pdf_reporte("Resumen de Dotación", datetime.now().strftime('%d/%m/%Y'), st.session_state.df_altas_general, st.session_state.df_bajas_general, bajas_por_motivo_full.reset_index(), resumen_altas_full, resumen_bajas_full, resumen_activos_full)
+        st.download_button(label="📄 Descargar Reporte General (PDF)", data=pdf_bytes_general, file_name=f"Reporte_General_Dotacion_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf")
+        st.markdown("---")
+        
         formatter = lambda x: f'{x:,.0f}'.replace(',', '.') if isinstance(x, (int, float)) else x
-        st.subheader("Composición de la Dotación Activa")
-        st.dataframe(resumen_activos_full.replace(0, '-').style.format(formatter))
+        st.subheader("Composición de la Dotación Activa"); st.dataframe(resumen_activos_full.replace(0, '-').style.format(formatter))
         st.subheader("Resumen de Novedades")
         col1, col2 = st.columns(2)
         with col1: st.write("**Bajas por Categoría y Línea:**"); st.dataframe(resumen_bajas_full.replace(0, '-').style.format(formatter))
         with col2: st.write("**Altas por Categoría y Línea:**"); st.dataframe(resumen_altas_full.replace(0, '-').style.format(formatter))
         st.write("**Bajas por Motivo:**"); st.dataframe(bajas_por_motivo_full.style.format(formatter))
     else:
-        st.info("Sube un archivo en la pestaña 'Novedades (General)' para ver los resúmenes.")
+        st.info("Sube un archivo en la pestaña 'Novedades (General)' para ver los resúmenes y descargar el PDF.")
 
-# --- LÓGICA PESTAÑA 3 (REPORTE SEMANAL) ---
 with tab3:
     st.header("Generador de Reportes Semanales (por fecha de evento)")
     uploader_sem = st.file_uploader("Sube un archivo (pestaña 'Sheet1') o usa el general", type=['xlsx'], key="upload_sem")
     
-    archivo_para_sem = uploader_sem or uploaded_file_general
+    archivo_para_sem = uploader_sem or st.session_state.get('uploaded_file_general')
 
     if archivo_para_sem:
         try:
             sheet_name_sem = 'Sheet1' if uploader_sem else 'BaseQuery'
             df_base_sem = procesar_archivo_base(archivo_para_sem, sheet_name=sheet_name_sem)
-            resumen_activos_sem = pd.crosstab(df_base_sem[df_base_sem['Status ocupación'] == 'Activo']['Categoría'], df_base_sem[df_base_sem['Status ocupación'] == 'Activo']['Línea'], margins=True, margins_name="Total")
-
+            
             start_date_sem = st.date_input("Fecha de inicio del reporte", datetime.now() - timedelta(days=7), key="semanal")
             if start_date_sem:
                 end_date_sem = datetime.now()
@@ -227,6 +246,8 @@ with tab3:
                 df_altas_sem_raw, df_bajas_sem_raw = filtrar_novedades_por_fecha(df_base_sem, pd.to_datetime(start_date_sem), end_date_sem)
                 df_altas_sem, df_bajas_sem = formatear_y_procesar_novedades(df_altas_sem_raw, df_bajas_sem_raw)
                 
+                df_activos_sem = calcular_activos_a_fecha(df_base_sem, end_date_sem)
+                resumen_activos_sem = pd.crosstab(df_activos_sem['Categoría'], df_activos_sem['Línea'], margins=True, margins_name="Total")
                 resumen_bajas_sem = pd.crosstab(df_bajas_sem_raw['Categoría'], df_bajas_sem_raw['Línea'], margins=True, margins_name="Total")
                 resumen_altas_sem = pd.crosstab(df_altas_sem_raw['Categoría'], df_altas_sem_raw['Línea'], margins=True, margins_name="Total")
                 bajas_motivo_sem = df_bajas_sem_raw['Motivo de la medida'].value_counts().to_frame('Cantidad')
@@ -240,18 +261,16 @@ with tab3:
     else:
         st.info("Sube un archivo en la pestaña 'Novedades (General)' o aquí mismo para generar un reporte.")
 
-# --- LÓGICA PESTAÑA 4 (REPORTE MENSUAL) ---
 with tab4:
     st.header("Generador de Reportes Mensuales (por fecha de evento)")
     uploader_men = st.file_uploader("Sube un archivo (pestaña 'Sheet1') o usa el general", type=['xlsx'], key="upload_men")
 
-    archivo_para_men = uploader_men or uploaded_file_general
+    archivo_para_men = uploader_men or st.session_state.get('uploaded_file_general')
 
     if archivo_para_men:
         try:
             sheet_name_men = 'Sheet1' if uploader_men else 'BaseQuery'
             df_base_men = procesar_archivo_base(archivo_para_men, sheet_name=sheet_name_men)
-            resumen_activos_men = pd.crosstab(df_base_men[df_base_men['Status ocupación'] == 'Activo']['Categoría'], df_base_men[df_base_men['Status ocupación'] == 'Activo']['Línea'], margins=True, margins_name="Total")
             
             today = datetime.now()
             dflt_start = today.replace(day=1); dflt_end = (dflt_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
@@ -264,9 +283,12 @@ with tab4:
                 rango_str_men = f"{start_date_men.strftime('%d/%m/%Y')} - {end_date_men.strftime('%d/%m/%Y')}"
                 st.write(f"**Período a analizar:** {rango_str_men}")
 
-                df_altas_men_raw, df_bajas_men_raw = filtrar_novedades_por_fecha(df_base_men, pd.to_datetime(start_date_men), pd.to_datetime(end_date_men))
+                end_date_men_dt = pd.to_datetime(end_date_men)
+                df_altas_men_raw, df_bajas_men_raw = filtrar_novedades_por_fecha(df_base_men, pd.to_datetime(start_date_men), end_date_men_dt)
                 df_altas_men, df_bajas_men = formatear_y_procesar_novedades(df_altas_men_raw, df_bajas_men_raw)
                 
+                df_activos_men = calcular_activos_a_fecha(df_base_men, end_date_men_dt)
+                resumen_activos_men = pd.crosstab(df_activos_men['Categoría'], df_activos_men['Línea'], margins=True, margins_name="Total")
                 resumen_bajas_men = pd.crosstab(df_bajas_men_raw['Categoría'], df_bajas_men_raw['Línea'], margins=True, margins_name="Total")
                 resumen_altas_men = pd.crosstab(df_altas_men_raw['Categoría'], df_altas_men_raw['Línea'], margins=True, margins_name="Total")
                 bajas_motivo_men = df_bajas_men_raw['Motivo de la medida'].value_counts().to_frame('Cantidad')
