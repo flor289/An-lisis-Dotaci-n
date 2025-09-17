@@ -119,6 +119,7 @@ def formatear_y_procesar_novedades(df_altas_raw, df_bajas_raw):
     if not df_bajas.empty:
         df_bajas['Antigüedad'] = ((datetime.now() - df_bajas['Fecha']) / pd.Timedelta(days=365.25)).fillna(0).astype(int)
         df_bajas['Fecha nac.'] = df_bajas['Fecha nac.'].dt.strftime('%d/%m/%Y')
+        # La fecha 'Desde' ya viene corregida, solo se formatea
         df_bajas['Desde'] = df_bajas['Desde'].dt.strftime('%d/%m/%Y')
     else:
         df_bajas = pd.DataFrame(columns=['Nº pers.', 'Apellido', 'Nombre de pila', 'Motivo de la medida', 'Fecha nac.', 'Antigüedad', 'Desde', 'Línea', 'Categoría'])
@@ -134,10 +135,15 @@ def formatear_y_procesar_novedades(df_altas_raw, df_bajas_raw):
 def filtrar_novedades_por_fecha(df_base_para_filtrar, fecha_inicio, fecha_fin):
     df = df_base_para_filtrar.copy()
     altas_filtradas = df[(df['Fecha'] >= fecha_inicio) & (df['Fecha'] <= fecha_fin)].copy()
+
     df_bajas_potenciales = df[df['Status ocupación'] == 'Dado de baja'].copy()
     if not df_bajas_potenciales.empty:
+        # CORRECCIÓN: Restar 1 día a una nueva columna para el filtro
         df_bajas_potenciales['fecha_baja_corregida'] = df_bajas_potenciales['Desde'] - pd.Timedelta(days=1)
         bajas_filtradas = df_bajas_potenciales[(df_bajas_potenciales['fecha_baja_corregida'] >= fecha_inicio) & (df_bajas_potenciales['fecha_baja_corregida'] <= fecha_fin)].copy()
+        # CORRECCIÓN: Sobrescribir la columna 'Desde' con la fecha corregida antes de devolverla
+        if not bajas_filtradas.empty:
+            bajas_filtradas['Desde'] = bajas_filtradas['fecha_baja_corregida']
     else:
         bajas_filtradas = pd.DataFrame()
     return altas_filtradas, bajas_filtradas
@@ -189,7 +195,6 @@ with tab1:
             df_altas_general, df_bajas_general = formatear_y_procesar_novedades(df_altas_general_raw, df_bajas_general_raw)
             st.session_state.df_altas_general, st.session_state.df_bajas_general = df_altas_general, df_bajas_general
             
-            # --- BOTÓN DE DESCARGA MOVIDO AQUÍ ---
             resumen_activos_full = pd.crosstab(df_base_general[df_base_general['Status ocupación'] == 'Activo']['Categoría'], df_base_general[df_base_general['Status ocupación'] == 'Activo']['Línea'], margins=True, margins_name="Total")
             resumen_bajas_full = pd.crosstab(df_bajas_general_raw['Categoría'], df_bajas_general_raw['Línea'], margins=True, margins_name="Total")
             resumen_altas_full = pd.crosstab(df_altas_general_raw['Categoría'], df_altas_general_raw['Línea'], margins=True, margins_name="Total")
@@ -210,9 +215,9 @@ with tab1:
 with tab2:
     st.header("Dashboard de Resúmenes (General)")
     if 'df_base_general' in st.session_state:
+        # Los datos ya fueron procesados en tab1, solo se recuperan
         df_base_general = st.session_state.df_base_general
         df_activos_general_raw = st.session_state.df_activos_general_raw
-        
         activos_legajos = set(df_activos_general_raw['Nº pers.'])
         df_bajas_general_raw = df_base_general[df_base_general['Nº pers.'].isin(activos_legajos) & (df_base_general['Status ocupación'] == 'Dado de baja')].copy()
         df_altas_general_raw = df_base_general[~df_base_general['Nº pers.'].isin(activos_legajos) & (df_base_general['Status ocupación'] == 'Activo')].copy()
